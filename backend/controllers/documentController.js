@@ -1,19 +1,59 @@
 import { GoogleGenAI } from '@google/genai';
 import Document from '../models/Document.js';
 
+export const getSafeMimeType = (file) => {
+  const ext = (file.originalname || '').split('.').pop().toLowerCase();
+  if (ext === 'pdf') return 'application/pdf';
+  if (ext === 'png') return 'image/png';
+  if (['jpg', 'jpeg'].includes(ext)) return 'image/jpeg';
+  if (ext === 'webp') return 'image/webp';
+  if (['tif', 'tiff'].includes(ext)) return 'image/tiff';
+  if (ext === 'bmp') return 'image/bmp';
+
+  const mime = (file.mimetype || '').toLowerCase();
+  if (mime.includes('pdf')) return 'application/pdf';
+  if (mime.includes('png')) return 'image/png';
+  if (mime.includes('jpeg') || mime.includes('jpg')) return 'image/jpeg';
+  if (mime.includes('webp')) return 'image/webp';
+
+  return file.mimetype || 'application/pdf';
+};
+
 export const analyzeDocument = async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded.' });
+    if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+      return res.status(400).json({ error: 'No file uploaded or file is empty.' });
     }
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const mimeType = getSafeMimeType(req.file);
 
-    const extractionPrompt = `You are an expert accounting auditor. Analyze the following invoice document image and extract all relevant data.
+    const extractionPrompt = `You are an expert accounting auditor and document classification system for DocuAudit AI.
+Analyze the uploaded document (PDF or image).
 
-Return ONLY a valid JSON object with this exact structure — no markdown, no code fences, no extra text:
+STAGE 1: DOCUMENT VALIDITY CLASSIFICATION
+Determine with high precision whether the document is a valid invoice/billing document or an invalid document.
+
+VALIDITY CRITERIA:
+- VALID (isValidDocument: true):
+  * The document is any legitimate financial or billing document: Tax Invoice, Commercial Invoice, Proforma Invoice, Sales Receipt, POS/Cash Register Receipt, Store/Restaurant/Fuel Receipt, Utility Bill (electric, water, gas, telecom), Purchase Order, Credit/Debit Note, Freight/Logistics Bill, or Transaction Statement.
+  * Even if the document is scanned, photographed, skewed, folded, thermal-printed, handwritten, simplified, or in another language or currency, IF it represents a bill, receipt, or invoice, it MUST be classified as VALID (isValidDocument: true).
+  * DO NOT flag genuine receipts or invoices as invalid!
+
+- INVALID (isValidDocument: false):
+  * The document is a blank or empty page / picture with nothing on it ("picture with nothing", solid color, blank canvas).
+  * The document is a non-document photo (such as people, selfies, pets, landscapes, scenery, vehicles, food without receipt, memes, artwork, desktop screenshots, social media).
+  * The document is completely unrelated to billing or finance (such as personal resumes/CVs, academic papers, essays, novels, source code files, driver licenses or passports without billing data).
+  * The document is completely blurred, blacked out, or corrupted such that no financial details or text can be discerned.
+
+STAGE 2: DATA EXTRACTION (If valid)
+If valid, extract the vendor, invoice details, itemized line items, subtotal, tax amount, total amount, and concise executive summary.
+
+Return ONLY a valid JSON object matching this exact schema — no markdown backticks, no code blocks, no other text:
 {
-  "documentType": "Tax Invoice",
+  "isValidDocument": boolean,
+  "invalidReason": "A clear, specific explanation if invalid, or null if valid",
+  "documentType": "Tax Invoice | Commercial Invoice | Receipt | Utility Bill | Purchase Order | Invalid Document",
   "vendor": {
     "name": "string",
     "taxId": "string or null"
@@ -31,7 +71,7 @@ Return ONLY a valid JSON object with this exact structure — no markdown, no co
   "subtotal": number,
   "taxAmount": number,
   "totalAmount": number,
-  "executiveSummary": "A concise 2-3 sentence summary of this invoice for an executive review."
+  "executiveSummary": "A concise 2-3 sentence summary of this document."
 }`;
 
     const extractionResponse = await ai.models.generateContent({
@@ -41,7 +81,7 @@ Return ONLY a valid JSON object with this exact structure — no markdown, no co
           parts: [
             {
               inlineData: {
-                mimeType: req.file.mimetype,
+                mimeType,
                 data: req.file.buffer.toString('base64'),
               },
             },
@@ -51,7 +91,7 @@ Return ONLY a valid JSON object with this exact structure — no markdown, no co
       ],
     });
 
-    const rawText = extractionResponse.candidates[0].content.parts[0].text.trim();
+    const rawText = extractionResponse.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
     const jsonMatch = rawText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return res.status(422).json({ error: 'Gemini did not return valid JSON.', raw: rawText });
@@ -59,9 +99,31 @@ Return ONLY a valid JSON object with this exact structure — no markdown, no co
 
     const parsed = JSON.parse(jsonMatch[0]);
 
-    const calculatedTotal = Number(((parsed.subtotal || 0) + (parsed.taxAmount || 0)).toFixed(2));
+    // Validation check: ensure pictures with nothing / non-documents are flagged as invalid
+    const hasAnyFinancialData = !!(
+      (parsed.vendor?.name && parsed.vendor.name.trim()) ||
+      (parsed.lineItems && parsed.lineItems.length > 0) ||
+      (parsed.totalAmount && Number(parsed.totalAmount) > 0) ||
+      (parsed.invoiceNumber && parsed.invoiceNumber.trim())
+    );
+
+    if (parsed.isValidDocument === false || (!parsed.isValidDocument && !hasAnyFinancialData)) {
+      return res.status(400).json({
+        error: `Invalid Document: ${parsed.invalidReason || 'The uploaded file is not a valid invoice, bill, or receipt.'}`,
+        isInvalidDocument: true,
+        invalidReason: parsed.invalidReason || 'The uploaded file does not contain invoice or billing information.',
+        fileName: req.file.originalname,
+        documentType: parsed.documentType || 'Invalid Document',
+      });
+    }
+
+    // Process compute only for valid documents
     const statedTotal = Number((parsed.totalAmount || 0).toFixed(2));
-    const mathMismatch = Math.abs(calculatedTotal - statedTotal) > 0.05;
+    const subtotal = Number((parsed.subtotal || 0).toFixed(2));
+    const taxAmount = Number((parsed.taxAmount || 0).toFixed(2));
+    const hasSubtotalOrTax = subtotal > 0 || taxAmount > 0;
+    const calculatedTotal = Number((subtotal + taxAmount).toFixed(2));
+    const mathMismatch = hasSubtotalOrTax && statedTotal > 0 && Math.abs(calculatedTotal - statedTotal) > 0.05;
 
     const audit = {
       mathCheckPassed: !mathMismatch,
@@ -73,8 +135,8 @@ Return ONLY a valid JSON object with this exact structure — no markdown, no co
     if (mathMismatch) {
       audit.flags.push('Arithmetic discrepancy: Subtotal + Tax does not match Total');
     }
-    if (!parsed.vendor?.taxId) {
-      audit.flags.push('Vendor Tax Registration ID missing');
+    if (!parsed.vendor?.taxId && parsed.documentType === 'Tax Invoice') {
+      audit.flags.push('Vendor Tax Registration ID missing on Tax Invoice');
     }
 
     audit.riskLevel = mathMismatch || audit.flags.length > 0 ? 'HIGH' : 'LOW';
@@ -94,7 +156,7 @@ Write the email in a formal but polite tone. Include a clear subject line at the
         contents: [{ parts: [{ text: disputePrompt }] }],
       });
 
-      disputeDraft = disputeResponse.candidates[0].content.parts[0].text.trim();
+      disputeDraft = disputeResponse.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
     }
 
     const savedDoc = await Document.create({
@@ -218,7 +280,7 @@ Auditor Question: ${question}`;
       contents: [{ parts: [{ text: prompt }] }],
     });
 
-    const reply = response.candidates[0].content.parts[0].text.trim();
+    const reply = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
     return res.json({ reply });
   } catch (err) {
     console.error('chatWithDocument error:', err);

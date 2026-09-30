@@ -5,7 +5,7 @@ import {
   AlertTriangle, CheckCircle2, Loader2, Copy, Check, ChevronDown,
   ChevronUp, BarChart3, Activity, TrendingUp, Hash, Send, LogOut,
   Lock, Download, RefreshCw, CheckCircle, Mail, Eye, EyeOff,
-  X, MessageSquare, Sparkles, UserCircle,
+  X, MessageSquare, Sparkles, UserCircle, AlertOctagon, HelpCircle,
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.jsx';
 import SpotlightCard from './components/SpotlightCard.jsx';
@@ -61,7 +61,44 @@ function downloadCSV(history) {
   URL.revokeObjectURL(url);
 }
 
+// Check if a file is an allowable invoice document (PDF or common image formats)
+export const isAllowedInvoiceFile = (file) => {
+  if (!file) return false;
+  const name = file.name || '';
+  const ext = name.split('.').pop().toLowerCase();
+  const allowedExtensions = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'tiff', 'tif', 'bmp'];
+  if (allowedExtensions.includes(ext)) return true;
+
+  const mime = (file.type || '').toLowerCase();
+  const allowedMimes = [
+    'application/pdf',
+    'application/x-pdf',
+    'application/acrobat',
+    'applications/vnd.pdf',
+    'text/pdf',
+    'image/png',
+    'image/jpeg',
+    'image/jpg',
+    'image/pjpeg',
+    'image/webp',
+    'image/tiff',
+    'image/bmp',
+  ];
+  return allowedMimes.includes(mime);
+};
+
 const glassCard = 'bg-white/70 backdrop-blur-md border border-[#E7E1D4] shadow-sm hover:shadow-md hover:border-[#D8CEBC] rounded-2xl transition-all duration-300';
+
+function GoogleIcon({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" fill="#EA4335"/>
+    </svg>
+  );
+}
 
 function MetricCard({ icon: Icon, label, value, sub, iconBg, demo }) {
   return (
@@ -91,13 +128,16 @@ function RiskBadge({ level }) {
   );
 }
 
-/* ── AUTH MODAL (overlay, not blocking wall) ── */
+/* ── AUTH MODAL (Google OAuth + Email/Password) ── */
 function AuthModal({ onClose, onSuccess, contextMessage }) {
   const { login } = useAuth();
   const [tab, setTab] = useState('login');
   const [form, setForm] = useState({ name: '', email: '', password: '' });
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [showGoogleAccountSelect, setShowGoogleAccountSelect] = useState(false);
+  const [customGoogleEmail, setCustomGoogleEmail] = useState('');
   const [error, setError] = useState('');
 
   // Close on Escape
@@ -109,6 +149,50 @@ function AuthModal({ onClose, onSuccess, contextMessage }) {
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const autofill = () => setForm({ name: 'Demo Auditor', email: 'demo@docuaudit.ai', password: 'Demo@2026' });
+
+  const executeGoogleAuth = async (payload) => {
+    setGoogleLoading(true);
+    setError('');
+    try {
+      const { data } = await axios.post(`${API}/auth/google`, payload);
+      login(data.token, data.user);
+      onSuccess?.();
+    } catch (err) {
+      if (!err.response) {
+        setError('Cannot reach the backend server. Please ensure port 5000 is running.');
+      } else {
+        setError(err.response?.data?.error || 'Google authentication failed. Please try again.');
+      }
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = () => {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    if (clientId && window.google?.accounts?.id) {
+      try {
+        window.google.accounts.id.initialize({
+          client_id: clientId,
+          callback: (response) => {
+            if (response.credential) {
+              executeGoogleAuth({ credential: response.credential });
+            }
+          },
+        });
+        window.google.accounts.id.prompt((notification) => {
+          if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+            setShowGoogleAccountSelect(true);
+          }
+        });
+        return;
+      } catch (e) {
+        console.warn('Google Identity Services prompt fallback:', e);
+      }
+    }
+    // If no client ID configured yet or popup blocked, open seamless account chooser
+    setShowGoogleAccountSelect(true);
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -136,14 +220,13 @@ function AuthModal({ onClose, onSuccess, contextMessage }) {
   const inputCls = 'w-full bg-[#FAF7F2] border border-[#E7E1D4] rounded-xl px-4 py-3 text-stone-900 placeholder-stone-400 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 transition-all text-sm';
 
   return (
-    // Backdrop — click outside to close
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 backdrop-blur-sm"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="relative w-full max-w-md mx-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
         <SpotlightCard
-          className="bg-white/92 backdrop-blur-xl border border-[#E7E1D4] shadow-2xl shadow-stone-300/40"
+          className="bg-white/95 backdrop-blur-xl border border-[#E7E1D4] shadow-2xl shadow-stone-300/40"
           spotlightColor="rgba(245, 158, 11, 0.08)"
         >
           <div className="p-8 space-y-5">
@@ -171,6 +254,97 @@ function AuthModal({ onClose, onSuccess, contextMessage }) {
                 {contextMessage}
               </div>
             )}
+
+            {/* ── GOOGLE AUTHENTICATION BUTTON ── */}
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                disabled={googleLoading || loading}
+                className="w-full flex items-center justify-center gap-3 bg-white hover:bg-stone-50 active:bg-stone-100 text-stone-800 font-semibold py-3 px-4 rounded-xl border border-[#D8CEBC] hover:border-amber-400 transition-all shadow-sm hover:shadow text-sm"
+              >
+                {googleLoading ? <Loader2 size={17} className="animate-spin text-amber-600" /> : <GoogleIcon size={19} />}
+                <span>{googleLoading ? 'Signing in with Google…' : 'Continue with Google'}</span>
+              </button>
+
+              {/* Seamless Google Account Dialog (for Instant/Local testing or direct selection) */}
+              {showGoogleAccountSelect && (
+                <div className="p-4 bg-amber-50/70 border border-amber-200/90 rounded-xl space-y-3 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <GoogleIcon size={15} />
+                      <span className="text-xs font-bold text-stone-800">Sign in with Google Account</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowGoogleAccountSelect(false)}
+                      className="text-stone-400 hover:text-stone-600 p-0.5"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      executeGoogleAuth({
+                        email: 'auditor.google@docuaudit.ai',
+                        name: 'Google Auditor',
+                        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=face',
+                        googleId: 'google-demo-user-1',
+                      })
+                    }
+                    className="w-full flex items-center justify-between p-2.5 bg-white hover:bg-stone-50 border border-amber-200 rounded-lg text-left transition-all"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs">
+                        G
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-stone-800">Google Auditor (Instant One-Click)</p>
+                        <p className="text-[11px] text-stone-500">auditor.google@docuaudit.ai</p>
+                      </div>
+                    </div>
+                    <span className="text-xs text-amber-700 font-semibold">Select →</span>
+                  </button>
+
+                  <div className="flex gap-2">
+                    <input
+                      type="email"
+                      placeholder="Or enter your Google email"
+                      value={customGoogleEmail}
+                      onChange={(e) => setCustomGoogleEmail(e.target.value)}
+                      className="flex-1 bg-white border border-amber-200 rounded-lg px-3 py-1.5 text-xs text-stone-800 placeholder-stone-400 focus:outline-none focus:border-amber-400"
+                    />
+                    <button
+                      type="button"
+                      disabled={!customGoogleEmail.includes('@')}
+                      onClick={() =>
+                        executeGoogleAuth({
+                          email: customGoogleEmail,
+                          name: customGoogleEmail.split('@')[0],
+                          googleId: `google-uid-${Date.now()}`,
+                        })
+                      }
+                      className="bg-stone-900 disabled:opacity-50 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-stone-800 transition-colors shrink-0"
+                    >
+                      Sign In
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-stone-400 leading-tight">
+                    Tip: Set <code className="text-amber-700 bg-amber-100/60 px-1 py-0.5 rounded">VITE_GOOGLE_CLIENT_ID</code> in <code className="text-stone-600">frontend/.env</code> for live Google Cloud OAuth dialogs.
+                  </p>
+                </div>
+              )}
+
+              {/* Divider */}
+              <div className="relative flex items-center justify-center pt-1">
+                <div className="border-t border-[#E7E1D4] w-full" />
+                <span className="bg-[#FAF7F2] px-3 text-[11px] uppercase tracking-wider text-stone-400 font-bold absolute">
+                  or continue with email
+                </span>
+              </div>
+            </div>
 
             {/* Tabs */}
             <div className="flex rounded-xl bg-[#F5EFE6] p-1 gap-1">
@@ -352,6 +526,7 @@ export default function App() {
   const [loadingStage, setLoadingStage] = useState(0);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [error, setError] = useState('');
+  const [invalidDocs, setInvalidDocs] = useState([]); // Specifically holds invalid / rejected documents
   const [copied, setCopied] = useState(false);
   const [disputeOpen, setDisputeOpen] = useState(false);
   const [showCopilot, setShowCopilot] = useState(false);
@@ -398,17 +573,20 @@ export default function App() {
     }
   }, [isAuthenticated]);
 
-  // ── Post-auth success handler ──
+  // ── Audit processor ──
   const handleAuditWithFiles = useCallback(async (filesToProcess) => {
     if (!filesToProcess?.length) return;
     setLoading(true);
     setError('');
+    setInvalidDocs([]);
     setActiveDoc(null);
     setDisputeOpen(false);
     setShowCopilot(false);
     setBatchProgress({ current: 0, total: filesToProcess.length });
 
     const results = [];
+    const rejected = [];
+
     for (let i = 0; i < filesToProcess.length; i++) {
       setBatchProgress({ current: i + 1, total: filesToProcess.length });
       try {
@@ -419,14 +597,27 @@ export default function App() {
         });
         results.push(data);
       } catch (err) {
-        setError(`Failed on "${filesToProcess[i].name}": ${err.response?.data?.error || err.message}`);
+        if (err.response?.data?.isInvalidDocument) {
+          rejected.push({
+            fileName: filesToProcess[i].name,
+            reason: err.response.data.invalidReason || 'The uploaded file does not contain invoice or billing information.',
+            documentType: err.response.data.documentType || 'Invalid Document',
+          });
+        } else {
+          setError(`Audit processing error on "${filesToProcess[i].name}": ${err.response?.data?.error || err.message}`);
+        }
       }
+    }
+
+    if (rejected.length > 0) {
+      setInvalidDocs(rejected);
     }
 
     if (results.length > 0) {
       setActiveDoc(results[results.length - 1]);
       setHistory((prev) => [...results.reverse(), ...prev]);
     }
+
     setFiles([]);
     if (fileInputRef.current) fileInputRef.current.value = '';
     setLoading(false);
@@ -434,6 +625,7 @@ export default function App() {
     await fetchAnalytics();
   }, [fetchAnalytics]);
 
+  // ── Post-auth success handler ──
   const handleAuthSuccess = useCallback(() => {
     setShowAuthModal(false);
     fetchAnalytics();
@@ -449,15 +641,35 @@ export default function App() {
 
   // ── File handlers ──
   const acceptFiles = useCallback((incoming) => {
-    const valid = incoming.filter((f) => ['application/pdf', 'image/png', 'image/jpeg'].includes(f.type));
+    setError('');
+    if (!incoming || incoming.length === 0) return;
+
+    const valid = incoming.filter(isAllowedInvoiceFile);
+    const rejected = incoming.filter((f) => !isAllowedInvoiceFile(f));
+
+    if (rejected.length > 0 && valid.length === 0) {
+      setError(`Unsupported file format (${rejected.map((f) => f.name).join(', ')}). Please drop or select a PDF document or invoice image (PDF, PNG, JPG, WEBP).`);
+      return;
+    }
+
+    if (rejected.length > 0) {
+      setError(`Ignored unsupported file(s): ${rejected.map((f) => f.name).join(', ')}. Only PDF documents and invoice images are accepted.`);
+    }
+
     if (!valid.length) return;
+
     if (!isAuthenticated) {
       setPendingFiles(valid);
-      setAuthContext('Please sign in or create an account to run live AI-powered audits.');
+      setAuthContext('Please sign in with your account or Continue with Google to run live AI audits.');
       setShowAuthModal(true);
       return;
     }
-    setFiles(valid);
+
+    setFiles((prev) => {
+      const existingNames = new Set(prev.map((f) => f.name));
+      const additions = valid.filter((f) => !existingNames.has(f.name));
+      return [...prev, ...additions];
+    });
   }, [isAuthenticated]);
 
   const onDrop = (e) => {
@@ -509,7 +721,7 @@ export default function App() {
     <div className="min-h-screen font-sans" style={{ backgroundColor: '#FAF7F2', color: '#1C1917' }}>
       <HearlyBackground />
 
-      {/* Auth modal — overlay, not a blocking wall */}
+      {/* Auth modal — with Google OAuth & Email/Password */}
       {showAuthModal && (
         <AuthModal
           onClose={() => { setShowAuthModal(false); setPendingFiles(null); }}
@@ -550,10 +762,26 @@ export default function App() {
               {isAuthenticated ? (
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-2 bg-[#F5EFE6] border border-[#E7E1D4] rounded-xl px-3 py-1.5">
-                    <div className="w-6 h-6 rounded-lg bg-stone-900 flex items-center justify-center text-xs font-bold text-amber-400">
-                      {user?.name?.charAt(0).toUpperCase()}
+                    {user?.avatar ? (
+                      <div className="relative">
+                        <img src={user.avatar} alt={user.name} className="w-7 h-7 rounded-lg object-cover border border-amber-300" />
+                        {user.authProvider === 'google' && (
+                          <div className="absolute -bottom-1 -right-1 bg-white rounded-full p-0.5 shadow-xs">
+                            <GoogleIcon size={10} />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="w-6 h-6 rounded-lg bg-stone-900 flex items-center justify-center text-xs font-bold text-amber-400">
+                        {user?.name?.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <div className="hidden sm:flex flex-col text-left leading-tight">
+                      <span className="text-xs font-semibold text-stone-800">Auditor: {user?.name}</span>
+                      {user?.authProvider === 'google' && (
+                        <span className="text-[10px] text-amber-700 font-bold">Google Account</span>
+                      )}
                     </div>
-                    <span className="text-xs font-semibold text-stone-700 hidden sm:block">Auditor: {user?.name}</span>
                   </div>
                   <button
                     onClick={logout}
@@ -564,13 +792,22 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-                <button
-                  onClick={() => { setAuthContext(''); setShowAuthModal(true); }}
-                  className="flex items-center gap-2 bg-stone-900 hover:bg-stone-800 text-stone-50 text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-md shadow-stone-900/10"
-                >
-                  <UserCircle size={15} />
-                  Sign In / Register
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { setAuthContext(''); setShowAuthModal(true); }}
+                    className="hidden sm:flex items-center gap-2 bg-white hover:bg-stone-50 text-stone-700 border border-[#D8CEBC] text-xs font-bold px-3.5 py-2 rounded-xl transition-all shadow-xs"
+                  >
+                    <GoogleIcon size={15} />
+                    <span>Continue with Google</span>
+                  </button>
+                  <button
+                    onClick={() => { setAuthContext(''); setShowAuthModal(true); }}
+                    className="flex items-center gap-2 bg-stone-900 hover:bg-stone-800 text-stone-50 text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-md shadow-stone-900/10"
+                  >
+                    <UserCircle size={15} />
+                    Sign In / Register
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -589,7 +826,7 @@ export default function App() {
                   onClick={() => { setAuthContext(''); setShowAuthModal(true); }}
                   className="text-xs text-amber-600 hover:text-amber-700 font-semibold underline underline-offset-2"
                 >
-                  Sign in to see your live metrics →
+                  Sign in or Continue with Google to see live metrics →
                 </button>
               )}
             </div>
@@ -601,7 +838,7 @@ export default function App() {
             </div>
           </section>
 
-          {/* ── Upload Zone ── */}
+          {/* ── Upload Zone (PDF & Multi-Document Support) ── */}
           <section>
             <SpotlightCard className={glassCard} spotlightColor="rgba(245, 158, 11, 0.09)">
               <div className="p-6 space-y-5">
@@ -610,7 +847,13 @@ export default function App() {
                     <UploadCloud size={17} className="text-amber-600" />
                     <h2 className="font-bold text-stone-900">Upload Invoices for Audit</h2>
                   </div>
-                  <span className="text-xs text-stone-400 font-medium">PDF · PNG · JPG · Multi-file</span>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded text-[11px] font-extrabold bg-rose-100 text-rose-700">PDF</span>
+                    <span className="px-2 py-0.5 rounded text-[11px] font-extrabold bg-amber-100 text-amber-800">PNG</span>
+                    <span className="px-2 py-0.5 rounded text-[11px] font-extrabold bg-amber-100 text-amber-800">JPG</span>
+                    <span className="px-2 py-0.5 rounded text-[11px] font-extrabold bg-amber-100 text-amber-800">WEBP</span>
+                    <span className="text-xs text-stone-400 font-medium ml-1">· Batch Multi-file</span>
+                  </div>
                 </div>
 
                 <div
@@ -618,44 +861,92 @@ export default function App() {
                   onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
                   onDragLeave={() => setDragging(false)}
                   onDrop={onDrop}
-                  className={`border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center gap-3 cursor-pointer transition-all duration-300 ${
+                  className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center gap-3 cursor-pointer transition-all duration-300 ${
                     dragging ? 'border-amber-400 bg-amber-50/40'
                     : displayFiles.length ? 'border-emerald-400 bg-emerald-50/20'
                     : 'border-[#D6CEBE] bg-white/50 hover:border-amber-400 hover:bg-amber-50/20'
                   }`}
                 >
                   {displayFiles.length > 0 ? (
-                    <>
-                      <CheckCircle size={32} className="text-emerald-600" />
-                      <div className="text-center">
-                        <p className="font-bold text-emerald-700">
-                          {displayFiles.length === 1 ? displayFiles[0].name : `${displayFiles.length} files selected`}
-                        </p>
-                        <p className="text-xs text-stone-400 mt-1">
-                          {displayFiles.length === 1 ? `${(displayFiles[0].size / 1024).toFixed(1)} KB` : displayFiles.map((f) => f.name).join(', ')}
-                        </p>
-                        {!isAuthenticated && (
-                          <p className="text-xs text-amber-600 font-semibold mt-2">Sign in to run the audit →</p>
-                        )}
+                    <div className="w-full space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-emerald-700 font-bold text-sm">
+                          <CheckCircle size={18} />
+                          <span>{displayFiles.length} Document{displayFiles.length > 1 ? 's' : ''} Ready for Audit</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFiles([]);
+                            setPendingFiles(null);
+                            if (fileInputRef.current) fileInputRef.current.value = '';
+                          }}
+                          className="text-xs text-rose-600 hover:text-rose-700 font-semibold underline underline-offset-2"
+                        >
+                          Clear all
+                        </button>
                       </div>
-                    </>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-48 overflow-y-auto p-1">
+                        {displayFiles.map((file, idx) => {
+                          const isPdf = file.name?.toLowerCase().endsWith('.pdf') || file.type?.includes('pdf');
+                          return (
+                            <div
+                              key={idx}
+                              className="flex items-center justify-between gap-2 p-2.5 bg-white border border-[#E7E1D4] rounded-xl shadow-xs"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={`px-2 py-0.5 text-[10px] font-extrabold rounded ${
+                                  isPdf ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
+                                }`}>
+                                  {isPdf ? 'PDF' : 'IMG'}
+                                </span>
+                                <span className="text-xs font-semibold text-stone-800 truncate" title={file.name}>
+                                  {file.name}
+                                </span>
+                              </div>
+                              <span className="text-[11px] text-stone-400 shrink-0">
+                                {(file.size / 1024).toFixed(1)} KB
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {!isAuthenticated && (
+                        <p className="text-center text-xs text-amber-600 font-semibold pt-1">
+                          Sign in with your account or Continue with Google to run the audit →
+                        </p>
+                      )}
+                    </div>
                   ) : (
                     <>
-                      <UploadCloud size={32} className="text-stone-300" />
+                      <UploadCloud size={34} className="text-stone-300" />
                       <div className="text-center">
-                        <p className="text-stone-500 font-semibold">Drag &amp; drop invoices here</p>
+                        <p className="text-stone-700 font-semibold text-base">Drag &amp; drop invoice PDFs or images here</p>
                         <p className="text-xs text-stone-400 mt-1">
-                          {isAuthenticated ? 'or click to browse · select multiple for batch audit' : 'or click to browse — sign in to run live AI audit'}
+                          {isAuthenticated
+                            ? 'or click to browse · select multiple files for batch audit'
+                            : 'Supports digital & scanned PDFs, PNG, JPG, and WEBP · sign in to audit'}
                         </p>
                       </div>
                     </>
                   )}
-                  <input ref={fileInputRef} type="file" accept=".pdf,image/png,image/jpeg" multiple className="hidden" onChange={onFileChange} />
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,application/pdf,image/png,image/jpeg,image/jpg,image/webp,image/tiff,image/bmp"
+                    multiple
+                    className="hidden"
+                    onChange={onFileChange}
+                  />
                 </div>
 
                 {error && (
                   <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-sm text-rose-700">
-                    <AlertTriangle size={15} className="mt-0.5 shrink-0" />{error}
+                    <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                    <span>{error}</span>
                   </div>
                 )}
 
@@ -687,9 +978,9 @@ export default function App() {
                   className="w-full flex items-center justify-center gap-2 bg-stone-900 hover:bg-stone-800 disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed text-stone-50 font-bold py-3.5 rounded-xl transition-all shadow-md shadow-stone-900/10 disabled:shadow-none"
                 >
                   {loading ? (
-                    <><Loader2 size={17} className="animate-spin" /> Auditing…</>
+                    <><Loader2 size={17} className="animate-spin" /> Auditing Document…</>
                   ) : !isAuthenticated ? (
-                    <><ShieldCheck size={17} /> Sign In to Audit Document</>
+                    <><ShieldCheck size={17} /> Sign In or Continue with Google to Audit</>
                   ) : (
                     <><ShieldCheck size={17} /> Audit &amp; Validate {files.length > 1 ? `${files.length} Documents` : 'Document'}</>
                   )}
@@ -697,6 +988,57 @@ export default function App() {
               </div>
             </SpotlightCard>
           </section>
+
+          {/* ── INVALID DOCUMENTS NOTIFICATION (Strict Accuracy & Compute Protection) ── */}
+          {invalidDocs.length > 0 && (
+            <section className="bg-rose-50/95 border-2 border-rose-300 rounded-2xl p-5 shadow-sm space-y-3 animate-in fade-in duration-300">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-rose-100 rounded-xl text-rose-700 border border-rose-200">
+                    <ShieldAlert size={22} />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-rose-950 text-base">
+                      Invalid Document{invalidDocs.length > 1 ? 's' : ''} Rejected — Compute Halted
+                    </h3>
+                    <p className="text-xs text-rose-700">
+                      DocuAudit AI verified that the following uploaded file{invalidDocs.length > 1 ? 's do' : ' does'} not contain valid invoice or billing data. No compute, discrepancy, or ledger updates were processed.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setInvalidDocs([])}
+                  className="text-rose-400 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-100 transition-colors"
+                  title="Dismiss notification"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                {invalidDocs.map((item, idx) => (
+                  <div key={idx} className="bg-white/90 border border-rose-200 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-xs">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span className="px-2 py-0.5 bg-rose-100 border border-rose-300 text-rose-800 text-[10px] font-extrabold rounded">
+                        INVALID
+                      </span>
+                      <span className="font-bold text-stone-900 text-sm truncate max-w-xs">{item.fileName}</span>
+                    </div>
+                    <p className="text-xs text-rose-800 font-medium sm:text-right">
+                      {item.reason}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-rose-800/80 pt-2 border-t border-rose-200">
+                <AlertOctagon size={14} className="shrink-0 text-rose-600" />
+                <span>
+                  <strong>Audit Quality Guarantee:</strong> DocuAudit AI only computes genuine invoices, receipts, and bills (PDF, PNG, JPG, WEBP). Blank pictures, random photos, and non-billing documents are flagged as invalid to protect audit accuracy.
+                </span>
+              </div>
+            </section>
+          )}
 
           {/* ── Active Audit Report ── */}
           {activeDoc && isAuthenticated && (
@@ -814,8 +1156,8 @@ export default function App() {
                           <td className="px-5 py-2.5 text-right font-bold text-stone-700">{fmt(activeDoc.financials?.subtotal)}</td>
                         </tr>
                         <tr className="bg-[#FAF7F2] text-xs text-stone-500">
-                          <td colSpan={3} className="px-5 py-2 text-right font-semibold">Tax Amount</td>
-                          <td className="px-5 py-2 text-right font-bold text-stone-700">{fmt(activeDoc.financials?.taxAmount)}</td>
+                          <td colSpan={3} className="px-5 py-2.5 text-right font-semibold">Tax Amount</td>
+                          <td className="px-5 py-2.5 text-right font-bold text-stone-700">{fmt(activeDoc.financials?.taxAmount)}</td>
                         </tr>
                         <tr className="bg-amber-50/60 border-t border-amber-100">
                           <td colSpan={3} className="px-5 py-3 text-right font-extrabold text-amber-700 text-xs uppercase tracking-wider">Total</td>
@@ -943,22 +1285,31 @@ export default function App() {
             </section>
           )}
 
-          {/* ── Guest CTA Banner ── */}
+          {/* ── Guest CTA Banner with Google Sign In Option ── */}
           {!isAuthenticated && (
             <section>
               <SpotlightCard className="bg-stone-900/95 border-stone-800" spotlightColor="rgba(245, 158, 11, 0.15)">
                 <div className="p-8 flex flex-col sm:flex-row items-center justify-between gap-6">
                   <div className="text-center sm:text-left">
                     <h3 className="text-xl font-extrabold text-stone-50">Ready to audit your invoices?</h3>
-                    <p className="text-sm text-stone-400 mt-1">Create a free account to unlock AI-powered audits, fraud detection, and ERP sync.</p>
+                    <p className="text-sm text-stone-400 mt-1">Sign in with Google or create an account to unlock AI-powered audits, fraud detection, and ERP sync.</p>
                   </div>
-                  <button
-                    onClick={() => { setAuthContext(''); setShowAuthModal(true); }}
-                    className="flex-shrink-0 flex items-center gap-2 bg-amber-400 hover:bg-amber-300 text-stone-900 font-bold px-6 py-3 rounded-xl transition-all shadow-lg shadow-amber-400/20"
-                  >
-                    <ShieldCheck size={17} />
-                    Get Started Free
-                  </button>
+                  <div className="flex items-center gap-3 flex-wrap justify-center sm:justify-end">
+                    <button
+                      onClick={() => { setAuthContext(''); setShowAuthModal(true); }}
+                      className="flex-shrink-0 flex items-center gap-2 bg-white hover:bg-stone-100 text-stone-900 font-bold px-5 py-3 rounded-xl transition-all shadow-md text-sm"
+                    >
+                      <GoogleIcon size={17} />
+                      Continue with Google
+                    </button>
+                    <button
+                      onClick={() => { setAuthContext(''); setShowAuthModal(true); }}
+                      className="flex-shrink-0 flex items-center gap-2 bg-amber-400 hover:bg-amber-300 text-stone-900 font-bold px-5 py-3 rounded-xl transition-all shadow-lg shadow-amber-400/20 text-sm"
+                    >
+                      <ShieldCheck size={17} />
+                      Get Started Free
+                    </button>
+                  </div>
                 </div>
               </SpotlightCard>
             </section>

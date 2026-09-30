@@ -14,7 +14,10 @@ import {
 } from './controllers/documentController.js';
 
 const app = express();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 30 * 1024 * 1024 }, // 30MB max file size
+});
 
 app.use(cors({ origin: '*' }));
 app.use(express.json());
@@ -26,6 +29,21 @@ app.get('/api/documents/analytics', protect, getAnalytics);
 app.get('/api/documents', protect, getDocuments);
 app.post('/api/documents/:id/chat', protect, chatWithDocument);
 app.patch('/api/documents/:id/sync', protect, syncToERP);
+
+// Multer & general error handler
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'File size exceeds 30MB limit.' });
+    }
+    return res.status(400).json({ error: `Upload error: ${err.message}` });
+  }
+  if (err) {
+    console.error('Server error:', err);
+    return res.status(err.status || 500).json({ error: err.message || 'Internal server error.' });
+  }
+  next();
+});
 
 const PORT = process.env.PORT || 5000;
 
