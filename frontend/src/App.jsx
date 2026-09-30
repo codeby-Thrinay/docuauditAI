@@ -118,7 +118,11 @@ function AuthModal() {
       const { data } = await axios.post(`${API}${endpoint}`, payload);
       login(data.token, data.user);
     } catch (err) {
-      setError(err.response?.data?.error || 'Authentication failed. Please try again.');
+      if (err.code === 'ERR_NETWORK' || err.message === 'Network Error' || !err.response) {
+        setError('Cannot reach the backend server. Please ensure the server is running on port 5000.');
+      } else {
+        setError(err.response?.data?.error || 'Authentication failed. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
