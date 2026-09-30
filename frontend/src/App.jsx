@@ -5,13 +5,36 @@ import {
   AlertTriangle, CheckCircle2, Loader2, Copy, Check, ChevronDown,
   ChevronUp, BarChart3, Activity, TrendingUp, Hash, Send, LogOut,
   Lock, Download, RefreshCw, CheckCircle, Mail, Eye, EyeOff,
-  X, MessageSquare, Sparkles, UserCircle, AlertOctagon, HelpCircle,
+  X, MessageSquare, Sparkles, UserCircle, AlertOctagon, Settings,
+  Globe, Server, Key,
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.jsx';
 import SpotlightCard from './components/SpotlightCard.jsx';
 import HearlyBackground from './components/HearlyBackground.jsx';
 
-const API = 'http://localhost:5000/api';
+// ── DYNAMIC API RESOLUTION (Supports Localhost, Render, and Vercel) ──
+export function getApiBaseUrl() {
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem('docuaudit_api_url');
+    if (saved && saved.trim()) {
+      const u = saved.trim().replace(/\/+$/, '');
+      return u.endsWith('/api') ? u : `${u}/api`;
+    }
+  }
+  if (import.meta.env.VITE_API_URL) {
+    const env = import.meta.env.VITE_API_URL.trim().replace(/\/+$/, '');
+    return env.endsWith('/api') ? env : `${env}/api`;
+  }
+  return 'http://localhost:5000/api';
+}
+
+export function getStoredGoogleClientId() {
+  if (typeof window !== 'undefined') {
+    const saved = localStorage.getItem('docuaudit_google_client_id');
+    if (saved && saved.trim()) return saved.trim();
+  }
+  return import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+}
 
 const LOADING_STAGES = [
   'Extracting line items and invoice metadata…',
@@ -61,12 +84,28 @@ function downloadCSV(history) {
   URL.revokeObjectURL(url);
 }
 
-// Check if a file is an allowable invoice document (PDF or common image formats)
+// ── FILE TYPE VALIDATOR (Accepts PDFs, Images, and Text Documents) ──
 export const isAllowedInvoiceFile = (file) => {
   if (!file) return false;
   const name = file.name || '';
   const ext = name.split('.').pop().toLowerCase();
-  const allowedExtensions = ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'tiff', 'tif', 'bmp'];
+  const allowedExtensions = [
+    'pdf',
+    'png',
+    'jpg',
+    'jpeg',
+    'webp',
+    'tiff',
+    'tif',
+    'bmp',
+    'txt',
+    'text',
+    'csv',
+    'tsv',
+    'rtf',
+    'log',
+    'md',
+  ];
   if (allowedExtensions.includes(ext)) return true;
 
   const mime = (file.type || '').toLowerCase();
@@ -83,6 +122,12 @@ export const isAllowedInvoiceFile = (file) => {
     'image/webp',
     'image/tiff',
     'image/bmp',
+    'text/plain',
+    'text/csv',
+    'text/tab-separated-values',
+    'application/rtf',
+    'text/rtf',
+    'text/markdown',
   ];
   return allowedMimes.includes(mime);
 };
@@ -128,17 +173,84 @@ function RiskBadge({ level }) {
   );
 }
 
-/* ── AUTH MODAL (Google OAuth + Email/Password) ── */
-function AuthModal({ onClose, onSuccess, contextMessage }) {
+/* ── BACKEND API CONFIGURATION MODAL ── */
+function BackendConfigModal({ apiUrl, onSave, onClose }) {
+  const [val, setVal] = useState(apiUrl);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/50 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-md mx-4 animate-in fade-in duration-200">
+        <SpotlightCard className="bg-white/95 backdrop-blur-xl border border-[#E7E1D4] shadow-2xl p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Server size={18} className="text-amber-600" />
+              <h3 className="font-bold text-stone-900 text-base">Backend API Connection</h3>
+            </div>
+            <button onClick={onClose} className="text-stone-400 hover:text-stone-700 p-1">
+              <X size={16} />
+            </button>
+          </div>
+
+          <p className="text-xs text-stone-600 leading-relaxed">
+            Specify the backend server URL. If you deployed your backend to <strong>Render</strong>, paste your Render URL here so the deployed frontend can reach it.
+          </p>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-stone-700">API URL / Render Host</label>
+            <input
+              type="text"
+              value={val}
+              onChange={(e) => setVal(e.target.value)}
+              placeholder="https://your-service.onrender.com"
+              className="w-full bg-[#FAF7F2] border border-[#E7E1D4] rounded-xl px-4 py-2.5 text-stone-900 text-sm focus:outline-none focus:border-amber-400"
+            />
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                const u = val.trim().replace(/\/+$/, '');
+                const formatted = u.endsWith('/api') ? u : `${u}/api`;
+                onSave(formatted);
+                onClose();
+              }}
+              className="flex-1 bg-stone-900 hover:bg-stone-800 text-white font-bold py-2.5 rounded-xl text-sm transition-all"
+            >
+              Save &amp; Connect
+            </button>
+            <button
+              onClick={() => {
+                onSave('http://localhost:5000/api');
+                onClose();
+              }}
+              className="px-3 py-2.5 border border-[#E7E1D4] bg-stone-50 hover:bg-stone-100 text-stone-700 text-xs font-semibold rounded-xl"
+            >
+              Reset Localhost
+            </button>
+          </div>
+        </SpotlightCard>
+      </div>
+    </div>
+  );
+}
+
+/* ── AUTH MODAL (Chrome Google Account Chooser + Email/Password) ── */
+function AuthModal({ apiUrl, onOpenBackendConfig, onClose, onSuccess, contextMessage }) {
   const { login } = useAuth();
   const [tab, setTab] = useState('login');
   const [form, setForm] = useState({ name: '', email: '', password: '' });
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
-  const [showGoogleAccountSelect, setShowGoogleAccountSelect] = useState(false);
-  const [customGoogleEmail, setCustomGoogleEmail] = useState('');
   const [error, setError] = useState('');
+  const [isConnectionError, setIsConnectionError] = useState(false);
+
+  // Setup prompt for Google Cloud OAuth Client ID (if not yet entered)
+  const [showClientIdPrompt, setShowClientIdPrompt] = useState(false);
+  const [clientIdInput, setClientIdInput] = useState(getStoredGoogleClientId());
 
   // Close on Escape
   useEffect(() => {
@@ -150,65 +262,112 @@ function AuthModal({ onClose, onSuccess, contextMessage }) {
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const autofill = () => setForm({ name: 'Demo Auditor', email: 'demo@docuaudit.ai', password: 'Demo@2026' });
 
-  const executeGoogleAuth = async (payload) => {
+  // ── TRIGGER REAL GOOGLE ACCOUNT CHOOSER (Shows Chrome Profiles) ──
+  const launchGoogleAccountChooser = useCallback((targetClientId) => {
+    const clientId = targetClientId || getStoredGoogleClientId();
+
+    if (!clientId) {
+      setShowClientIdPrompt(true);
+      return;
+    }
+
+    if (!window.google?.accounts?.oauth2) {
+      setError('Google Identity Services script is still loading. Please check your internet connection and try again.');
+      return;
+    }
+
     setGoogleLoading(true);
     setError('');
+    setIsConnectionError(false);
+
     try {
-      const { data } = await axios.post(`${API}/auth/google`, payload);
-      login(data.token, data.user);
-      onSuccess?.();
+      const client = window.google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'openid email profile',
+        prompt: 'select_account', // Forces Google to show all Chrome logged-in accounts
+        callback: async (tokenResponse) => {
+          if (tokenResponse?.error) {
+            console.error('Google token error:', tokenResponse);
+            setError(`Google sign-in error: ${tokenResponse.error_description || tokenResponse.error}`);
+            setGoogleLoading(false);
+            return;
+          }
+
+          if (tokenResponse?.access_token) {
+            try {
+              // 1. Fetch real Google account profile
+              const { data: profile } = await axios.get(
+                'https://www.googleapis.com/oauth2/v3/userinfo',
+                {
+                  headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+                }
+              );
+
+              // 2. Exchange with backend
+              const { data: authData } = await axios.post(`${apiUrl}/auth/google`, {
+                email: profile.email,
+                name: profile.name || profile.given_name || profile.email.split('@')[0],
+                avatar: profile.picture || '',
+                googleId: profile.sub,
+              });
+
+              login(authData.token, authData.user);
+              onSuccess?.();
+            } catch (authErr) {
+              console.error('Google auth error:', authErr);
+              if (!authErr.response) {
+                setIsConnectionError(true);
+                setError(`Cannot reach the backend server at ${apiUrl}. Please ensure your backend is running or set your Render URL.`);
+              } else {
+                setError(authErr.response?.data?.error || 'Google authentication failed.');
+              }
+            } finally {
+              setGoogleLoading(false);
+            }
+          }
+        },
+        error_callback: (err) => {
+          console.error('Google popup init error:', err);
+          setError('Google Sign-In popup was closed or blocked. Please allow popups for this site.');
+          setGoogleLoading(false);
+        },
+      });
+
+      // Opens native Google account selector window
+      client.requestAccessToken({ prompt: 'select_account' });
     } catch (err) {
-      if (!err.response) {
-        setError('Cannot reach the backend server. Please ensure port 5000 is running.');
-      } else {
-        setError(err.response?.data?.error || 'Google authentication failed. Please try again.');
-      }
-    } finally {
+      console.error('Failed to trigger Google OAuth:', err);
+      setError(`Failed to open Google account chooser: ${err.message}`);
       setGoogleLoading(false);
     }
-  };
+  }, [apiUrl, login, onSuccess]);
 
-  const handleGoogleSignIn = () => {
-    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    if (clientId && window.google?.accounts?.id) {
-      try {
-        window.google.accounts.id.initialize({
-          client_id: clientId,
-          callback: (response) => {
-            if (response.credential) {
-              executeGoogleAuth({ credential: response.credential });
-            }
-          },
-        });
-        window.google.accounts.id.prompt((notification) => {
-          if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-            setShowGoogleAccountSelect(true);
-          }
-        });
-        return;
-      } catch (e) {
-        console.warn('Google Identity Services prompt fallback:', e);
-      }
-    }
-    // If no client ID configured yet or popup blocked, open seamless account chooser
-    setShowGoogleAccountSelect(true);
+  const handleSaveClientIdAndContinue = (e) => {
+    e.preventDefault();
+    const cleaned = clientIdInput.trim();
+    if (!cleaned) return;
+    localStorage.setItem('docuaudit_google_client_id', cleaned);
+    setShowClientIdPrompt(false);
+    launchGoogleAccountChooser(cleaned);
   };
 
   const submit = async (e) => {
     e.preventDefault();
     setError('');
+    setIsConnectionError(false);
     setLoading(true);
     try {
       const endpoint = tab === 'login' ? '/auth/login' : '/auth/register';
       const payload = tab === 'login'
         ? { email: form.email, password: form.password }
         : { email: form.email, password: form.password, name: form.name };
-      const { data } = await axios.post(`${API}${endpoint}`, payload);
+      const { data } = await axios.post(`${apiUrl}${endpoint}`, payload);
       login(data.token, data.user);
       onSuccess?.();
     } catch (err) {
       if (!err.response) {
-        setError('Cannot reach the backend server. Please ensure it is running on port 5000.');
+        setIsConnectionError(true);
+        setError(`Cannot reach the backend server at ${apiUrl}. If deployed on Vercel, please connect your Render backend URL.`);
       } else {
         setError(err.response?.data?.error || 'Authentication failed. Please try again.');
       }
@@ -255,86 +414,53 @@ function AuthModal({ onClose, onSuccess, contextMessage }) {
               </div>
             )}
 
-            {/* ── GOOGLE AUTHENTICATION BUTTON ── */}
+            {/* ── GOOGLE AUTHENTICATION (Chrome Account Chooser) ── */}
             <div className="space-y-3">
               <button
                 type="button"
-                onClick={handleGoogleSignIn}
+                onClick={() => launchGoogleAccountChooser()}
                 disabled={googleLoading || loading}
                 className="w-full flex items-center justify-center gap-3 bg-white hover:bg-stone-50 active:bg-stone-100 text-stone-800 font-semibold py-3 px-4 rounded-xl border border-[#D8CEBC] hover:border-amber-400 transition-all shadow-sm hover:shadow text-sm"
               >
                 {googleLoading ? <Loader2 size={17} className="animate-spin text-amber-600" /> : <GoogleIcon size={19} />}
-                <span>{googleLoading ? 'Signing in with Google…' : 'Continue with Google'}</span>
+                <span>{googleLoading ? 'Connecting with Google…' : 'Continue with Google'}</span>
               </button>
 
-              {/* Seamless Google Account Dialog (for Instant/Local testing or direct selection) */}
-              {showGoogleAccountSelect && (
-                <div className="p-4 bg-amber-50/70 border border-amber-200/90 rounded-xl space-y-3 animate-in fade-in duration-200">
+              {/* Setup box for Google OAuth Client ID if not yet entered */}
+              {showClientIdPrompt && (
+                <form onSubmit={handleSaveClientIdAndContinue} className="p-4 bg-amber-50/80 border border-amber-200 rounded-xl space-y-3 animate-in fade-in duration-200">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <GoogleIcon size={15} />
-                      <span className="text-xs font-bold text-stone-800">Sign in with Google Account</span>
+                      <Key size={15} className="text-amber-700" />
+                      <span className="text-xs font-bold text-stone-900">Connect Google Cloud OAuth</span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowGoogleAccountSelect(false)}
-                      className="text-stone-400 hover:text-stone-600 p-0.5"
-                    >
+                    <button type="button" onClick={() => setShowClientIdPrompt(false)} className="text-stone-400 hover:text-stone-600">
                       <X size={14} />
                     </button>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      executeGoogleAuth({
-                        email: 'auditor.google@docuaudit.ai',
-                        name: 'Google Auditor',
-                        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=face',
-                        googleId: 'google-demo-user-1',
-                      })
-                    }
-                    className="w-full flex items-center justify-between p-2.5 bg-white hover:bg-stone-50 border border-amber-200 rounded-lg text-left transition-all"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs">
-                        G
-                      </div>
-                      <div>
-                        <p className="text-xs font-bold text-stone-800">Google Auditor (Instant One-Click)</p>
-                        <p className="text-[11px] text-stone-500">auditor.google@docuaudit.ai</p>
-                      </div>
-                    </div>
-                    <span className="text-xs text-amber-700 font-semibold">Select →</span>
-                  </button>
-
+                  <p className="text-xs text-stone-600 leading-relaxed">
+                    To show your signed-in Chrome accounts in Google's official popup, enter your <strong>Google OAuth 2.0 Web Client ID</strong> (from Google Cloud Console):
+                  </p>
+                  <input
+                    type="text"
+                    required
+                    placeholder="xxxxxx-xxxxxx.apps.googleusercontent.com"
+                    value={clientIdInput}
+                    onChange={(e) => setClientIdInput(e.target.value)}
+                    className="w-full bg-white border border-amber-300 rounded-lg px-3 py-2 text-xs text-stone-800 focus:outline-none focus:border-amber-500 font-mono"
+                  />
                   <div className="flex gap-2">
-                    <input
-                      type="email"
-                      placeholder="Or enter your Google email"
-                      value={customGoogleEmail}
-                      onChange={(e) => setCustomGoogleEmail(e.target.value)}
-                      className="flex-1 bg-white border border-amber-200 rounded-lg px-3 py-1.5 text-xs text-stone-800 placeholder-stone-400 focus:outline-none focus:border-amber-400"
-                    />
                     <button
-                      type="button"
-                      disabled={!customGoogleEmail.includes('@')}
-                      onClick={() =>
-                        executeGoogleAuth({
-                          email: customGoogleEmail,
-                          name: customGoogleEmail.split('@')[0],
-                          googleId: `google-uid-${Date.now()}`,
-                        })
-                      }
-                      className="bg-stone-900 disabled:opacity-50 text-white text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-stone-800 transition-colors shrink-0"
+                      type="submit"
+                      className="flex-1 bg-stone-900 hover:bg-stone-800 text-white text-xs font-bold py-2 rounded-lg transition-colors"
                     >
-                      Sign In
+                      Save &amp; Open Chrome Accounts
                     </button>
                   </div>
-                  <p className="text-[10px] text-stone-400 leading-tight">
-                    Tip: Set <code className="text-amber-700 bg-amber-100/60 px-1 py-0.5 rounded">VITE_GOOGLE_CLIENT_ID</code> in <code className="text-stone-600">frontend/.env</code> for live Google Cloud OAuth dialogs.
+                  <p className="text-[10px] text-stone-400">
+                    You can also set <code className="text-amber-800 bg-amber-100 px-1 py-0.5 rounded">VITE_GOOGLE_CLIENT_ID</code> in Vercel project environment variables.
                   </p>
-                </div>
+                </form>
               )}
 
               {/* Divider */}
@@ -376,11 +502,25 @@ function AuthModal({ onClose, onSuccess, contextMessage }) {
                   {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
               </div>
+
               {error && (
-                <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-sm text-rose-700">
-                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />{error}
+                <div className="flex flex-col gap-2 bg-rose-50 border border-rose-200 rounded-xl p-3.5 text-xs text-rose-700">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                    <span className="font-medium leading-relaxed">{error}</span>
+                  </div>
+                  {isConnectionError && (
+                    <button
+                      type="button"
+                      onClick={onOpenBackendConfig}
+                      className="self-start mt-1 text-xs font-bold text-amber-800 bg-amber-100 hover:bg-amber-200 px-3 py-1.5 rounded-lg transition-colors border border-amber-300"
+                    >
+                      ⚙️ Configure Render Backend URL
+                    </button>
+                  )}
                 </div>
               )}
+
               <button
                 type="submit"
                 disabled={loading}
@@ -401,7 +541,7 @@ function AuthModal({ onClose, onSuccess, contextMessage }) {
 }
 
 /* ── COPILOT PANEL ── */
-function CopilotPanel({ doc, onClose }) {
+function CopilotPanel({ doc, apiUrl, onClose }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [thinking, setThinking] = useState(false);
@@ -416,14 +556,14 @@ function CopilotPanel({ doc, onClose }) {
     setMessages((m) => [...m, { role: 'user', text: q, ts: new Date() }]);
     setThinking(true);
     try {
-      const { data } = await axios.post(`${API}/documents/${doc._id}/chat`, { question: q });
+      const { data } = await axios.post(`${apiUrl}/documents/${doc._id}/chat`, { question: q });
       setMessages((m) => [...m, { role: 'ai', text: data.reply, ts: new Date() }]);
     } catch {
-      setMessages((m) => [...m, { role: 'ai', text: 'Unable to process that request. Please try again.', ts: new Date() }]);
+      setMessages((m) => [...m, { role: 'ai', text: 'Unable to process that request. Please check backend connection.', ts: new Date() }]);
     } finally {
       setThinking(false);
     }
-  }, [doc, input]);
+  }, [apiUrl, doc, input]);
 
   return (
     <div className="fixed right-0 top-0 h-full w-full sm:w-96 z-40 flex flex-col bg-[#FAF7F2] border-l border-[#E7E1D4] shadow-2xl shadow-stone-300/30">
@@ -511,6 +651,10 @@ function CopilotPanel({ doc, onClose }) {
 export default function App() {
   const { user, logout, isAuthenticated } = useAuth();
 
+  // Backend API URL state
+  const [apiUrl, setApiUrl] = useState(getApiBaseUrl);
+  const [showApiModal, setShowApiModal] = useState(false);
+
   // Auth modal state
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authContext, setAuthContext] = useState('');
@@ -520,13 +664,13 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [activeDoc, setActiveDoc] = useState(null);
   const [files, setFiles] = useState([]);
-  const [pendingFiles, setPendingFiles] = useState(null); // files held for after auth
+  const [pendingFiles, setPendingFiles] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState(0);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const [error, setError] = useState('');
-  const [invalidDocs, setInvalidDocs] = useState([]); // Specifically holds invalid / rejected documents
+  const [invalidDocs, setInvalidDocs] = useState([]);
   const [copied, setCopied] = useState(false);
   const [disputeOpen, setDisputeOpen] = useState(false);
   const [showCopilot, setShowCopilot] = useState(false);
@@ -535,14 +679,14 @@ export default function App() {
 
   // ── Data fetching ──
   const fetchAnalytics = useCallback(async () => {
-    try { const { data } = await axios.get(`${API}/documents/analytics`); setAnalytics(data); }
+    try { const { data } = await axios.get(`${apiUrl}/documents/analytics`); setAnalytics(data); }
     catch { /* silent */ }
-  }, []);
+  }, [apiUrl]);
 
   const fetchHistory = useCallback(async () => {
-    try { const { data } = await axios.get(`${API}/documents`); setHistory(data); }
+    try { const { data } = await axios.get(`${apiUrl}/documents`); setHistory(data); }
     catch { /* silent */ }
-  }, []);
+  }, [apiUrl]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -568,7 +712,7 @@ export default function App() {
     if (isAuthenticated) {
       action();
     } else {
-      setAuthContext(msg || 'Please sign in or create an account to use live audit features.');
+      setAuthContext(msg || 'Please sign in or Continue with Google to use live audit features.');
       setShowAuthModal(true);
     }
   }, [isAuthenticated]);
@@ -592,7 +736,7 @@ export default function App() {
       try {
         const form = new FormData();
         form.append('file', filesToProcess[i]);
-        const { data } = await axios.post(`${API}/documents/analyze`, form, {
+        const { data } = await axios.post(`${apiUrl}/documents/analyze`, form, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
         results.push(data);
@@ -603,6 +747,8 @@ export default function App() {
             reason: err.response.data.invalidReason || 'The uploaded file does not contain invoice or billing information.',
             documentType: err.response.data.documentType || 'Invalid Document',
           });
+        } else if (!err.response) {
+          setError(`Cannot reach backend at ${apiUrl}. Please check your Render backend URL.`);
         } else {
           setError(`Audit processing error on "${filesToProcess[i].name}": ${err.response?.data?.error || err.message}`);
         }
@@ -623,14 +769,13 @@ export default function App() {
     setLoading(false);
     setBatchProgress({ current: 0, total: 0 });
     await fetchAnalytics();
-  }, [fetchAnalytics]);
+  }, [apiUrl, fetchAnalytics]);
 
   // ── Post-auth success handler ──
   const handleAuthSuccess = useCallback(() => {
     setShowAuthModal(false);
     fetchAnalytics();
     fetchHistory();
-    // Resume pending file if one was saved before auth
     if (pendingFiles && pendingFiles.length > 0) {
       const toProcess = [...pendingFiles];
       setPendingFiles(null);
@@ -648,12 +793,12 @@ export default function App() {
     const rejected = incoming.filter((f) => !isAllowedInvoiceFile(f));
 
     if (rejected.length > 0 && valid.length === 0) {
-      setError(`Unsupported file format (${rejected.map((f) => f.name).join(', ')}). Please drop or select a PDF document or invoice image (PDF, PNG, JPG, WEBP).`);
+      setError(`Unsupported file format (${rejected.map((f) => f.name).join(', ')}). Please drop or select a PDF document, image (PNG, JPG, WEBP), or text document (TXT, CSV).`);
       return;
     }
 
     if (rejected.length > 0) {
-      setError(`Ignored unsupported file(s): ${rejected.map((f) => f.name).join(', ')}. Only PDF documents and invoice images are accepted.`);
+      setError(`Ignored unsupported file(s): ${rejected.map((f) => f.name).join(', ')}. DocuAudit accepts PDF, images, and text/CSV invoices.`);
     }
 
     if (!valid.length) return;
@@ -697,7 +842,7 @@ export default function App() {
     if (!activeDoc) return;
     setSyncing(true);
     try {
-      const { data } = await axios.patch(`${API}/documents/${activeDoc._id}/sync`);
+      const { data } = await axios.patch(`${apiUrl}/documents/${activeDoc._id}/sync`);
       setActiveDoc(data);
       setHistory((prev) => prev.map((d) => (d._id === data._id ? data : d)));
     } catch (err) {
@@ -717,13 +862,30 @@ export default function App() {
   // Files to show in the dropzone (pending or active)
   const displayFiles = isAuthenticated ? files : (pendingFiles || []);
 
+  const apiHostDisplay = apiUrl.replace(/^https?:\/\//, '').replace(/\/api$/, '');
+
   return (
     <div className="min-h-screen font-sans" style={{ backgroundColor: '#FAF7F2', color: '#1C1917' }}>
       <HearlyBackground />
 
-      {/* Auth modal — with Google OAuth & Email/Password */}
+      {/* Backend API Configuration Modal */}
+      {showApiModal && (
+        <BackendConfigModal
+          apiUrl={apiUrl}
+          onSave={(newUrl) => {
+            localStorage.setItem('docuaudit_api_url', newUrl);
+            setApiUrl(newUrl);
+            setError('');
+          }}
+          onClose={() => setShowApiModal(false)}
+        />
+      )}
+
+      {/* Auth modal — with Chrome Google Account Chooser & Email/Password */}
       {showAuthModal && (
         <AuthModal
+          apiUrl={apiUrl}
+          onOpenBackendConfig={() => { setShowAuthModal(false); setShowApiModal(true); }}
           onClose={() => { setShowAuthModal(false); setPendingFiles(null); }}
           onSuccess={handleAuthSuccess}
           contextMessage={authContext}
@@ -732,7 +894,7 @@ export default function App() {
 
       {/* Copilot panel */}
       {showCopilot && activeDoc && isAuthenticated && (
-        <CopilotPanel doc={activeDoc} onClose={() => setShowCopilot(false)} />
+        <CopilotPanel doc={activeDoc} apiUrl={apiUrl} onClose={() => setShowCopilot(false)} />
       )}
 
       {/* All UI above canvas */}
@@ -754,10 +916,16 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-3">
-              <div className="hidden sm:flex items-center gap-2 bg-emerald-50 text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-full">
+              {/* Backend status / switcher */}
+              <button
+                onClick={() => setShowApiModal(true)}
+                title="Click to configure backend API host"
+                className="hidden sm:flex items-center gap-2 bg-[#F5EFE6] hover:bg-amber-100/60 text-stone-700 border border-[#E7E1D4] px-3 py-1.5 rounded-full text-xs font-semibold transition-all"
+              >
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-xs font-semibold">API Connected · Port 5000</span>
-              </div>
+                <span className="truncate max-w-[150px]">API: {apiHostDisplay}</span>
+                <Settings size={12} className="text-stone-400" />
+              </button>
 
               {isAuthenticated ? (
                 <div className="flex items-center gap-2">
@@ -838,20 +1006,19 @@ export default function App() {
             </div>
           </section>
 
-          {/* ── Upload Zone (PDF & Multi-Document Support) ── */}
+          {/* ── Upload Zone (PDF, Images & Text/CSV Documents Support) ── */}
           <section>
             <SpotlightCard className={glassCard} spotlightColor="rgba(245, 158, 11, 0.09)">
               <div className="p-6 space-y-5">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <UploadCloud size={17} className="text-amber-600" />
                     <h2 className="font-bold text-stone-900">Upload Invoices for Audit</h2>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded text-[11px] font-extrabold bg-rose-100 text-rose-700">PDF</span>
-                    <span className="px-2 py-0.5 rounded text-[11px] font-extrabold bg-amber-100 text-amber-800">PNG</span>
-                    <span className="px-2 py-0.5 rounded text-[11px] font-extrabold bg-amber-100 text-amber-800">JPG</span>
-                    <span className="px-2 py-0.5 rounded text-[11px] font-extrabold bg-amber-100 text-amber-800">WEBP</span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="px-2 py-0.5 rounded text-[11px] font-extrabold bg-rose-100 text-rose-700 border border-rose-200">PDF</span>
+                    <span className="px-2 py-0.5 rounded text-[11px] font-extrabold bg-amber-100 text-amber-800 border border-amber-200">IMAGE</span>
+                    <span className="px-2 py-0.5 rounded text-[11px] font-extrabold bg-blue-100 text-blue-700 border border-blue-200">TXT · CSV</span>
                     <span className="text-xs text-stone-400 font-medium ml-1">· Batch Multi-file</span>
                   </div>
                 </div>
@@ -890,17 +1057,33 @@ export default function App() {
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-48 overflow-y-auto p-1">
                         {displayFiles.map((file, idx) => {
-                          const isPdf = file.name?.toLowerCase().endsWith('.pdf') || file.type?.includes('pdf');
+                          const name = (file.name || '').toLowerCase();
+                          const ext = name.split('.').pop();
+                          const isPdf = ext === 'pdf' || file.type?.includes('pdf');
+                          const isCsv = ext === 'csv' || ext === 'tsv';
+                          const isTxt = ['txt', 'text', 'rtf', 'log', 'md'].includes(ext);
+
+                          let badgeCls = 'bg-amber-100 text-amber-800 border-amber-200';
+                          let badgeLabel = 'IMG';
+                          if (isPdf) {
+                            badgeCls = 'bg-rose-100 text-rose-700 border-rose-200';
+                            badgeLabel = 'PDF';
+                          } else if (isCsv) {
+                            badgeCls = 'bg-emerald-100 text-emerald-700 border-emerald-200';
+                            badgeLabel = 'CSV';
+                          } else if (isTxt) {
+                            badgeCls = 'bg-blue-100 text-blue-700 border-blue-200';
+                            badgeLabel = 'TXT';
+                          }
+
                           return (
                             <div
                               key={idx}
                               className="flex items-center justify-between gap-2 p-2.5 bg-white border border-[#E7E1D4] rounded-xl shadow-xs"
                             >
                               <div className="flex items-center gap-2 min-w-0">
-                                <span className={`px-2 py-0.5 text-[10px] font-extrabold rounded ${
-                                  isPdf ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
-                                }`}>
-                                  {isPdf ? 'PDF' : 'IMG'}
+                                <span className={`px-2 py-0.5 text-[10px] font-extrabold rounded border ${badgeCls}`}>
+                                  {badgeLabel}
                                 </span>
                                 <span className="text-xs font-semibold text-stone-800 truncate" title={file.name}>
                                   {file.name}
@@ -924,11 +1107,11 @@ export default function App() {
                     <>
                       <UploadCloud size={34} className="text-stone-300" />
                       <div className="text-center">
-                        <p className="text-stone-700 font-semibold text-base">Drag &amp; drop invoice PDFs or images here</p>
+                        <p className="text-stone-700 font-semibold text-base">Drag &amp; drop invoices, receipts, or text files here</p>
                         <p className="text-xs text-stone-400 mt-1">
                           {isAuthenticated
-                            ? 'or click to browse · select multiple files for batch audit'
-                            : 'Supports digital & scanned PDFs, PNG, JPG, and WEBP · sign in to audit'}
+                            ? 'Supports PDF, images (PNG, JPG, WEBP), and text files (TXT, CSV) · select multiple for batch audit'
+                            : 'Supports PDFs, invoice images, and text/CSV billing documents · sign in to audit'}
                         </p>
                       </div>
                     </>
@@ -936,7 +1119,7 @@ export default function App() {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".pdf,application/pdf,image/png,image/jpeg,image/jpg,image/webp,image/tiff,image/bmp"
+                    accept=".pdf,application/pdf,image/*,.txt,text/plain,.csv,text/csv,.tsv,.rtf,.log"
                     multiple
                     className="hidden"
                     onChange={onFileChange}
@@ -944,9 +1127,20 @@ export default function App() {
                 </div>
 
                 {error && (
-                  <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-sm text-rose-700">
-                    <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-                    <span>{error}</span>
+                  <div className="flex flex-col gap-2 bg-rose-50 border border-rose-200 rounded-xl p-4 text-xs text-rose-700">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                      <span className="font-semibold text-sm leading-relaxed">{error}</span>
+                    </div>
+                    {error.includes('Cannot reach') && (
+                      <button
+                        type="button"
+                        onClick={() => setShowApiModal(true)}
+                        className="self-start mt-1 text-xs font-bold text-amber-900 bg-amber-100 hover:bg-amber-200 px-3.5 py-1.5 rounded-lg transition-colors border border-amber-300"
+                      >
+                        ⚙️ Set Render Backend URL
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -1034,7 +1228,7 @@ export default function App() {
               <div className="flex items-center gap-2 text-xs text-rose-800/80 pt-2 border-t border-rose-200">
                 <AlertOctagon size={14} className="shrink-0 text-rose-600" />
                 <span>
-                  <strong>Audit Quality Guarantee:</strong> DocuAudit AI only computes genuine invoices, receipts, and bills (PDF, PNG, JPG, WEBP). Blank pictures, random photos, and non-billing documents are flagged as invalid to protect audit accuracy.
+                  <strong>Audit Quality Guarantee:</strong> DocuAudit AI only computes genuine invoices, receipts, and bills (PDF, Images, TXT, CSV). Blank pictures, random photos, and non-billing documents are flagged as invalid to protect audit accuracy.
                 </span>
               </div>
             </section>
@@ -1317,7 +1511,7 @@ export default function App() {
         </main>
 
         <footer className="border-t border-[#E7E1D4] mt-12 py-6 text-center text-xs text-stone-400">
-          DocuAudit AI · Powered by Gemini 2.5 Flash · MongoDB Atlas · All audit results are AI-assisted and should be verified by a qualified accountant.
+          DocuAudit AI · Powered by Gemini AI · MongoDB Atlas · All audit results are AI-assisted and should be verified by a qualified accountant.
         </footer>
       </div>
     </div>

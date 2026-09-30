@@ -9,14 +9,48 @@ export const getSafeMimeType = (file) => {
   if (ext === 'webp') return 'image/webp';
   if (['tif', 'tiff'].includes(ext)) return 'image/tiff';
   if (ext === 'bmp') return 'image/bmp';
+  if (['txt', 'text', 'log', 'rtf'].includes(ext)) return 'text/plain';
+  if (['csv', 'tsv'].includes(ext)) return 'text/csv';
 
   const mime = (file.mimetype || '').toLowerCase();
   if (mime.includes('pdf')) return 'application/pdf';
   if (mime.includes('png')) return 'image/png';
   if (mime.includes('jpeg') || mime.includes('jpg')) return 'image/jpeg';
   if (mime.includes('webp')) return 'image/webp';
+  if (mime.includes('csv')) return 'text/csv';
+  if (mime.includes('text') || mime.includes('plain')) return 'text/plain';
 
   return file.mimetype || 'application/pdf';
+};
+
+// Resilient multi-model executor with automatic fallback
+export const generateWithModelFallback = async (ai, contents) => {
+  const candidateModels = [
+    'gemini-3.5-flash',
+    'gemini-3.8-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-flash-latest',
+  ];
+
+  let lastError = null;
+  for (const model of candidateModels) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const resp = await ai.models.generateContent({ model, contents });
+        return resp;
+      } catch (err) {
+        lastError = err;
+        const msg = err.message || '';
+        if (msg.includes('503') || msg.includes('high demand') || msg.includes('UNAVAILABLE')) {
+          await new Promise((r) => setTimeout(r, 600));
+          continue;
+        }
+        break;
+      }
+    }
+  }
+  throw lastError;
 };
 
 export const analyzeDocument = async (req, res) => {
@@ -27,21 +61,22 @@ export const analyzeDocument = async (req, res) => {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     const mimeType = getSafeMimeType(req.file);
+    const isTextDoc = mimeType.startsWith('text/');
 
     const extractionPrompt = `You are an expert accounting auditor and document classification system for DocuAudit AI.
-Analyze the uploaded document (PDF or image).
+Analyze the uploaded document (which may be a PDF document, image file, text file (.txt), or CSV document (.csv)).
 
 STAGE 1: DOCUMENT VALIDITY CLASSIFICATION
 Determine with high precision whether the document is a valid invoice/billing document or an invalid document.
 
 VALIDITY CRITERIA:
 - VALID (isValidDocument: true):
-  * The document is any legitimate financial or billing document: Tax Invoice, Commercial Invoice, Proforma Invoice, Sales Receipt, POS/Cash Register Receipt, Store/Restaurant/Fuel Receipt, Utility Bill (electric, water, gas, telecom), Purchase Order, Credit/Debit Note, Freight/Logistics Bill, or Transaction Statement.
-  * Even if the document is scanned, photographed, skewed, folded, thermal-printed, handwritten, simplified, or in another language or currency, IF it represents a bill, receipt, or invoice, it MUST be classified as VALID (isValidDocument: true).
-  * DO NOT flag genuine receipts or invoices as invalid!
+  * The document is any legitimate financial or billing document: Tax Invoice, Commercial Invoice, Proforma Invoice, Sales Receipt, POS/Cash Register Receipt, Store/Restaurant/Fuel Receipt, Utility Bill (electric, water, gas, telecom), Purchase Order, Credit/Debit Note, Freight/Logistics Bill, Text-based Invoice, or Transaction Statement / Ledger export.
+  * Even if the document is scanned, photographed, skewed, thermal-printed, handwritten, simplified, or in another language or currency, or represented as a plain text (.txt) / CSV (.csv) receipt/invoice, IF it represents a bill, receipt, or invoice, it MUST be classified as VALID (isValidDocument: true).
+  * DO NOT flag genuine receipts, invoices, or billing text as invalid!
 
 - INVALID (isValidDocument: false):
-  * The document is a blank or empty page / picture with nothing on it ("picture with nothing", solid color, blank canvas).
+  * The document is a blank or empty page / picture with nothing on it ("picture with nothing", empty text file, solid color, blank canvas).
   * The document is a non-document photo (such as people, selfies, pets, landscapes, scenery, vehicles, food without receipt, memes, artwork, desktop screenshots, social media).
   * The document is completely unrelated to billing or finance (such as personal resumes/CVs, academic papers, essays, novels, source code files, driver licenses or passports without billing data).
   * The document is completely blurred, blacked out, or corrupted such that no financial details or text can be discerned.
@@ -53,7 +88,7 @@ Return ONLY a valid JSON object matching this exact schema — no markdown backt
 {
   "isValidDocument": boolean,
   "invalidReason": "A clear, specific explanation if invalid, or null if valid",
-  "documentType": "Tax Invoice | Commercial Invoice | Receipt | Utility Bill | Purchase Order | Invalid Document",
+  "documentType": "Tax Invoice | Commercial Invoice | Receipt | Utility Bill | Purchase Order | Text Invoice | Invalid Document",
   "vendor": {
     "name": "string",
     "taxId": "string or null"
@@ -74,9 +109,20 @@ Return ONLY a valid JSON object matching this exact schema — no markdown backt
   "executiveSummary": "A concise 2-3 sentence summary of this document."
 }`;
 
-    const extractionResponse = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [
+    // Structure contents appropriately for text docs vs images/PDFs
+    let contents;
+    if (isTextDoc) {
+      const textContent = req.file.buffer.toString('utf-8');
+      contents = [
+        {
+          parts: [
+            { text: `DOCUMENT TYPE: Text Document (${req.file.originalname})\nDOCUMENT CONTENT:\n${textContent}` },
+            { text: extractionPrompt },
+          ],
+        },
+      ];
+    } else {
+      contents = [
         {
           parts: [
             {
@@ -88,8 +134,10 @@ Return ONLY a valid JSON object matching this exact schema — no markdown backt
             { text: extractionPrompt },
           ],
         },
-      ],
-    });
+      ];
+    }
+
+    const extractionResponse = await generateWithModelFallback(ai, contents);
 
     const rawText = extractionResponse.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
     const jsonMatch = rawText.match(/\{[\s\S]*\}/);
@@ -135,8 +183,8 @@ Return ONLY a valid JSON object matching this exact schema — no markdown backt
     if (mathMismatch) {
       audit.flags.push('Arithmetic discrepancy: Subtotal + Tax does not match Total');
     }
-    if (!parsed.vendor?.taxId && parsed.documentType === 'Tax Invoice') {
-      audit.flags.push('Vendor Tax Registration ID missing on Tax Invoice');
+    if (!parsed.vendor?.taxId && (parsed.documentType === 'Tax Invoice' || parsed.documentType === 'Commercial Invoice')) {
+      audit.flags.push('Vendor Tax Registration ID missing on Tax/Commercial Invoice');
     }
 
     audit.riskLevel = mathMismatch || audit.flags.length > 0 ? 'HIGH' : 'LOW';
@@ -151,10 +199,7 @@ Arithmetic discrepancy amount: ${audit.discrepancy}
 
 Write the email in a formal but polite tone. Include a clear subject line at the top.`;
 
-      const disputeResponse = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [{ parts: [{ text: disputePrompt }] }],
-      });
+      const disputeResponse = await generateWithModelFallback(ai, [{ parts: [{ text: disputePrompt }] }]);
 
       disputeDraft = disputeResponse.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
     }
@@ -275,10 +320,7 @@ ${docContext}
 Auditor Question: ${question}`;
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [{ parts: [{ text: prompt }] }],
-    });
+    const response = await generateWithModelFallback(ai, [{ parts: [{ text: prompt }] }]);
 
     const reply = response.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
     return res.json({ reply });
