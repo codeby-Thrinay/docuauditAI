@@ -5,7 +5,7 @@ import {
   AlertTriangle, CheckCircle2, Loader2, Copy, Check, ChevronDown,
   ChevronUp, BarChart3, Activity, TrendingUp, Hash, Send, LogOut,
   Lock, Download, RefreshCw, CheckCircle, Mail, Eye, EyeOff,
-  X, MessageSquare, Sparkles,
+  X, MessageSquare, Sparkles, UserCircle,
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext.jsx';
 import SpotlightCard from './components/SpotlightCard.jsx';
@@ -25,6 +25,15 @@ const QUICK_PROMPTS = [
   'Generate a payment dispute breakdown',
 ];
 
+// Demo numbers shown to unauthenticated guests
+const DEMO_ANALYTICS = {
+  totalSpend: 128450,
+  totalDiscrepanciesCaught: 1842.50,
+  totalDocuments: 47,
+  lowRiskCount: 46,
+  highRiskCount: 1,
+};
+
 const fmt = (n) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n ?? 0);
 
@@ -37,15 +46,10 @@ const fmtTime = (date) =>
 function downloadCSV(history) {
   const header = ['Invoice #', 'Vendor', 'Invoice Date', 'Subtotal', 'Tax', 'Total', 'Discrepancy', 'Risk', 'ERP Status'];
   const rows = history.map((d) => [
-    d.invoiceNumber || '',
-    d.vendor?.name || '',
-    d.invoiceDate || '',
-    d.financials?.subtotal ?? 0,
-    d.financials?.taxAmount ?? 0,
-    d.financials?.totalAmount ?? 0,
-    d.audit?.discrepancy ?? 0,
-    d.audit?.riskLevel || '',
-    d.erpStatus || '',
+    d.invoiceNumber || '', d.vendor?.name || '', d.invoiceDate || '',
+    d.financials?.subtotal ?? 0, d.financials?.taxAmount ?? 0,
+    d.financials?.totalAmount ?? 0, d.audit?.discrepancy ?? 0,
+    d.audit?.riskLevel || '', d.erpStatus || '',
   ]);
   const csv = [header, ...rows].map((r) => r.map((v) => `"${v}"`).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
@@ -57,31 +61,24 @@ function downloadCSV(history) {
   URL.revokeObjectURL(url);
 }
 
-/* ── Shared card classes ── */
 const glassCard = 'bg-white/70 backdrop-blur-md border border-[#E7E1D4] shadow-sm hover:shadow-md hover:border-[#D8CEBC] rounded-2xl transition-all duration-300';
 
-/* ── Metric Card ── */
-function MetricCard({ icon: Icon, label, value, sub, iconBg }) {
+function MetricCard({ icon: Icon, label, value, sub, iconBg, demo }) {
   return (
-    <SpotlightCard
-      className={glassCard}
-      spotlightColor="rgba(245, 158, 11, 0.10)"
-    >
+    <SpotlightCard className={glassCard} spotlightColor="rgba(245, 158, 11, 0.10)">
       <div className="p-5 flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold uppercase tracking-widest text-stone-400">{label}</span>
-          <span className={`p-2 rounded-xl ${iconBg}`}>
-            <Icon size={15} className="text-white" />
-          </span>
+          <span className={`p-2 rounded-xl ${iconBg}`}><Icon size={15} className="text-white" /></span>
         </div>
-        <div className="text-3xl font-extrabold text-stone-900 leading-none">{value}</div>
+        <div className={`text-3xl font-extrabold leading-none ${demo ? 'text-stone-400' : 'text-stone-900'}`}>{value}</div>
         {sub && <div className="text-xs text-stone-400">{sub}</div>}
+        {demo && <div className="text-xs text-amber-600 font-semibold">Sign in to see live data</div>}
       </div>
     </SpotlightCard>
   );
 }
 
-/* ── Risk Badge ── */
 function RiskBadge({ level }) {
   return level === 'LOW' ? (
     <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -94,14 +91,21 @@ function RiskBadge({ level }) {
   );
 }
 
-/* ── AUTH MODAL ── */
-function AuthModal() {
+/* ── AUTH MODAL (overlay, not blocking wall) ── */
+function AuthModal({ onClose, onSuccess, contextMessage }) {
   const { login } = useAuth();
   const [tab, setTab] = useState('login');
   const [form, setForm] = useState({ name: '', email: '', password: '' });
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const autofill = () => setForm({ name: 'Demo Auditor', email: 'demo@docuaudit.ai', password: 'Demo@2026' });
@@ -117,9 +121,10 @@ function AuthModal() {
         : { email: form.email, password: form.password, name: form.name };
       const { data } = await axios.post(`${API}${endpoint}`, payload);
       login(data.token, data.user);
+      onSuccess?.();
     } catch (err) {
-      if (err.code === 'ERR_NETWORK' || err.message === 'Network Error' || !err.response) {
-        setError('Cannot reach the backend server. Please ensure the server is running on port 5000.');
+      if (!err.response) {
+        setError('Cannot reach the backend server. Please ensure it is running on port 5000.');
       } else {
         setError(err.response?.data?.error || 'Authentication failed. Please try again.');
       }
@@ -131,14 +136,26 @@ function AuthModal() {
   const inputCls = 'w-full bg-[#FAF7F2] border border-[#E7E1D4] rounded-xl px-4 py-3 text-stone-900 placeholder-stone-400 focus:outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100 transition-all text-sm';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <HearlyBackground />
-      <div className="relative z-10 w-full max-w-md mx-4">
+    // Backdrop — click outside to close
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/40 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="relative w-full max-w-md mx-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
         <SpotlightCard
-          className="bg-white/80 backdrop-blur-xl border border-[#E7E1D4] shadow-xl shadow-stone-200/60"
+          className="bg-white/92 backdrop-blur-xl border border-[#E7E1D4] shadow-2xl shadow-stone-300/40"
           spotlightColor="rgba(245, 158, 11, 0.08)"
         >
-          <div className="p-8 space-y-6">
+          <div className="p-8 space-y-5">
+            {/* Close button */}
+            <button
+              onClick={onClose}
+              className="absolute top-4 right-4 text-stone-400 hover:text-stone-700 p-1.5 rounded-lg hover:bg-stone-100 transition-all"
+            >
+              <X size={18} />
+            </button>
+
+            {/* Logo */}
             <div className="text-center space-y-2">
               <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-stone-900 shadow-lg mb-1">
                 <ShieldCheck size={28} className="text-amber-400" />
@@ -147,15 +164,22 @@ function AuthModal() {
               <p className="text-xs text-stone-500">Autonomous Document Processor &amp; Compliance Engine</p>
             </div>
 
+            {/* Contextual gate message */}
+            {contextMessage && (
+              <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
+                <Sparkles size={14} className="mt-0.5 shrink-0 text-amber-500" />
+                {contextMessage}
+              </div>
+            )}
+
+            {/* Tabs */}
             <div className="flex rounded-xl bg-[#F5EFE6] p-1 gap-1">
-              {[['login', 'Sign In'], ['register', 'Create Auditor Account']].map(([k, label]) => (
+              {[['login', 'Sign In'], ['register', 'Create Account']].map(([k, label]) => (
                 <button
                   key={k}
                   onClick={() => { setTab(k); setError(''); }}
                   className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${
-                    tab === k
-                      ? 'bg-white text-stone-900 shadow-sm border border-[#E7E1D4]'
-                      : 'text-stone-500 hover:text-stone-800'
+                    tab === k ? 'bg-white text-stone-900 shadow-sm border border-[#E7E1D4]' : 'text-stone-500 hover:text-stone-800'
                   }`}
                 >
                   {label}
@@ -178,13 +202,11 @@ function AuthModal() {
                   {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
               </div>
-
               {error && (
                 <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-sm text-rose-700">
                   <AlertTriangle size={14} className="mt-0.5 shrink-0" />{error}
                 </div>
               )}
-
               <button
                 type="submit"
                 disabled={loading}
@@ -194,7 +216,6 @@ function AuthModal() {
                 {loading ? 'Authenticating…' : tab === 'login' ? 'Sign In to Dashboard' : 'Create Account'}
               </button>
             </form>
-
             <button type="button" onClick={autofill} className="w-full text-xs text-stone-400 hover:text-amber-600 transition-colors py-1">
               ⚡ Auto-fill demo credentials
             </button>
@@ -251,9 +272,7 @@ function CopilotPanel({ doc, onClose }) {
         <p className="text-xs text-stone-400 font-semibold uppercase tracking-wider">Quick Prompts</p>
         <div className="flex flex-col gap-1.5">
           {QUICK_PROMPTS.map((p) => (
-            <button key={p} onClick={() => send(p)} className="text-left text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-100 hover:border-amber-300 rounded-lg px-3 py-2 transition-all">
-              {p}
-            </button>
+            <button key={p} onClick={() => send(p)} className="text-left text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-100 hover:border-amber-300 rounded-lg px-3 py-2 transition-all">{p}</button>
           ))}
         </div>
       </div>
@@ -271,9 +290,7 @@ function CopilotPanel({ doc, onClose }) {
               msg.role === 'user'
                 ? 'bg-stone-900 text-stone-50 rounded-br-sm shadow-sm'
                 : 'bg-white text-stone-700 border border-[#E7E1D4] rounded-bl-sm shadow-sm'
-            }`}>
-              {msg.text}
-            </div>
+            }`}>{msg.text}</div>
             <span className="text-xs text-stone-400">{fmtTime(msg.ts)}</span>
           </div>
         ))}
@@ -320,10 +337,16 @@ function CopilotPanel({ doc, onClose }) {
 export default function App() {
   const { user, logout, isAuthenticated } = useAuth();
 
+  // Auth modal state
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authContext, setAuthContext] = useState('');
+
+  // Dashboard state
   const [analytics, setAnalytics] = useState(null);
   const [history, setHistory] = useState([]);
   const [activeDoc, setActiveDoc] = useState(null);
   const [files, setFiles] = useState([]);
+  const [pendingFiles, setPendingFiles] = useState(null); // files held for after auth
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState(0);
@@ -335,6 +358,7 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const fileInputRef = useRef(null);
 
+  // ── Data fetching ──
   const fetchAnalytics = useCallback(async () => {
     try { const { data } = await axios.get(`${API}/documents/analytics`); setAnalytics(data); }
     catch { /* silent */ }
@@ -351,45 +375,54 @@ export default function App() {
     fetchHistory();
   }, [isAuthenticated, fetchAnalytics, fetchHistory]);
 
+  // Loading stage cycling
   useEffect(() => {
     if (!loading) { setLoadingStage(0); return; }
     const t = setInterval(() => setLoadingStage((s) => (s + 1) % LOADING_STAGES.length), 2200);
     return () => clearInterval(t);
   }, [loading]);
 
-  const healthScore = analytics && analytics.totalDocuments > 0
-    ? Math.round((analytics.lowRiskCount / analytics.totalDocuments) * 100)
+  // Display analytics — real data if authenticated, demo numbers for guests
+  const displayAnalytics = isAuthenticated ? analytics : DEMO_ANALYTICS;
+  const healthScore = displayAnalytics && displayAnalytics.totalDocuments > 0
+    ? Math.round((displayAnalytics.lowRiskCount / displayAnalytics.totalDocuments) * 100)
     : 100;
 
-  const onDrop = (e) => {
-    e.preventDefault(); setDragging(false);
-    const dropped = Array.from(e.dataTransfer.files).filter((f) =>
-      ['application/pdf', 'image/png', 'image/jpeg'].includes(f.type)
-    );
-    if (dropped.length) setFiles(dropped);
-  };
+  // ── Auth gate helper ──
+  const requireAuth = useCallback((action, msg) => {
+    if (isAuthenticated) {
+      action();
+    } else {
+      setAuthContext(msg || 'Please sign in or create an account to use live audit features.');
+      setShowAuthModal(true);
+    }
+  }, [isAuthenticated]);
 
-  const onFileChange = (e) => {
-    const selected = Array.from(e.target.files);
-    if (selected.length) setFiles(selected);
-  };
+  // ── Post-auth success handler ──
+  const handleAuditWithFiles = useCallback(async (filesToProcess) => {
+    if (!filesToProcess?.length) return;
+    setLoading(true);
+    setError('');
+    setActiveDoc(null);
+    setDisputeOpen(false);
+    setShowCopilot(false);
+    setBatchProgress({ current: 0, total: filesToProcess.length });
 
-  const handleAudit = async () => {
-    if (!files.length) return;
-    setLoading(true); setError(''); setActiveDoc(null); setDisputeOpen(false); setShowCopilot(false);
-    setBatchProgress({ current: 0, total: files.length });
     const results = [];
-    for (let i = 0; i < files.length; i++) {
-      setBatchProgress({ current: i + 1, total: files.length });
+    for (let i = 0; i < filesToProcess.length; i++) {
+      setBatchProgress({ current: i + 1, total: filesToProcess.length });
       try {
         const form = new FormData();
-        form.append('file', files[i]);
-        const { data } = await axios.post(`${API}/documents/analyze`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+        form.append('file', filesToProcess[i]);
+        const { data } = await axios.post(`${API}/documents/analyze`, form, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
         results.push(data);
       } catch (err) {
-        setError(`Failed on "${files[i].name}": ${err.response?.data?.error || err.message}`);
+        setError(`Failed on "${filesToProcess[i].name}": ${err.response?.data?.error || err.message}`);
       }
     }
+
     if (results.length > 0) {
       setActiveDoc(results[results.length - 1]);
       setHistory((prev) => [...results.reverse(), ...prev]);
@@ -399,7 +432,46 @@ export default function App() {
     setLoading(false);
     setBatchProgress({ current: 0, total: 0 });
     await fetchAnalytics();
+  }, [fetchAnalytics]);
+
+  const handleAuthSuccess = useCallback(() => {
+    setShowAuthModal(false);
+    fetchAnalytics();
+    fetchHistory();
+    // Resume pending file if one was saved before auth
+    if (pendingFiles && pendingFiles.length > 0) {
+      const toProcess = [...pendingFiles];
+      setPendingFiles(null);
+      setFiles(toProcess);
+      setTimeout(() => handleAuditWithFiles(toProcess), 300);
+    }
+  }, [pendingFiles, fetchAnalytics, fetchHistory, handleAuditWithFiles]);
+
+  // ── File handlers ──
+  const acceptFiles = useCallback((incoming) => {
+    const valid = incoming.filter((f) => ['application/pdf', 'image/png', 'image/jpeg'].includes(f.type));
+    if (!valid.length) return;
+    if (!isAuthenticated) {
+      setPendingFiles(valid);
+      setAuthContext('Please sign in or create an account to run live AI-powered audits.');
+      setShowAuthModal(true);
+      return;
+    }
+    setFiles(valid);
+  }, [isAuthenticated]);
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    acceptFiles(Array.from(e.dataTransfer.files));
   };
+
+  const onFileChange = (e) => {
+    acceptFiles(Array.from(e.target.files));
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleAudit = () => handleAuditWithFiles(files);
 
   const handleCopy = () => {
     if (activeDoc?.disputeDraft) {
@@ -424,20 +496,30 @@ export default function App() {
   };
 
   const selectDoc = (doc) => {
-    setActiveDoc(doc); setDisputeOpen(false); setShowCopilot(false);
+    setActiveDoc(doc);
+    setDisputeOpen(false);
+    setShowCopilot(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  if (!isAuthenticated) return <AuthModal />;
+  // Files to show in the dropzone (pending or active)
+  const displayFiles = isAuthenticated ? files : (pendingFiles || []);
 
   return (
     <div className="min-h-screen font-sans" style={{ backgroundColor: '#FAF7F2', color: '#1C1917' }}>
-
-      {/* Animated canvas backdrop */}
       <HearlyBackground />
 
-      {/* Copilot slide-out */}
-      {showCopilot && activeDoc && (
+      {/* Auth modal — overlay, not a blocking wall */}
+      {showAuthModal && (
+        <AuthModal
+          onClose={() => { setShowAuthModal(false); setPendingFiles(null); }}
+          onSuccess={handleAuthSuccess}
+          contextMessage={authContext}
+        />
+      )}
+
+      {/* Copilot panel */}
+      {showCopilot && activeDoc && isAuthenticated && (
         <CopilotPanel doc={activeDoc} onClose={() => setShowCopilot(false)} />
       )}
 
@@ -465,13 +547,13 @@ export default function App() {
                 <span className="text-xs font-semibold">API Connected · Port 5000</span>
               </div>
 
-              {user && (
+              {isAuthenticated ? (
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-2 bg-[#F5EFE6] border border-[#E7E1D4] rounded-xl px-3 py-1.5">
                     <div className="w-6 h-6 rounded-lg bg-stone-900 flex items-center justify-center text-xs font-bold text-amber-400">
-                      {user.name?.charAt(0).toUpperCase()}
+                      {user?.name?.charAt(0).toUpperCase()}
                     </div>
-                    <span className="text-xs font-semibold text-stone-700 hidden sm:block">Auditor: {user.name}</span>
+                    <span className="text-xs font-semibold text-stone-700 hidden sm:block">Auditor: {user?.name}</span>
                   </div>
                   <button
                     onClick={logout}
@@ -481,6 +563,14 @@ export default function App() {
                     <span className="hidden sm:inline">Sign Out</span>
                   </button>
                 </div>
+              ) : (
+                <button
+                  onClick={() => { setAuthContext(''); setShowAuthModal(true); }}
+                  className="flex items-center gap-2 bg-stone-900 hover:bg-stone-800 text-stone-50 text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-md shadow-stone-900/10"
+                >
+                  <UserCircle size={15} />
+                  Sign In / Register
+                </button>
               )}
             </div>
           </div>
@@ -490,12 +580,24 @@ export default function App() {
 
           {/* ── Metric Cards ── */}
           <section>
-            <p className="text-xs font-bold uppercase tracking-widest text-stone-400 mb-4">Live Audit Metrics</p>
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-xs font-bold uppercase tracking-widest text-stone-400">
+                {isAuthenticated ? 'Live Audit Metrics' : 'Platform Overview (Demo)'}
+              </p>
+              {!isAuthenticated && (
+                <button
+                  onClick={() => { setAuthContext(''); setShowAuthModal(true); }}
+                  className="text-xs text-amber-600 hover:text-amber-700 font-semibold underline underline-offset-2"
+                >
+                  Sign in to see your live metrics →
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <MetricCard icon={DollarSign}   label="Total Spend Audited"    value={fmt(analytics?.totalSpend)}               sub="Across all your invoices"                                iconBg="bg-stone-800" />
-              <MetricCard icon={AlertTriangle} label="Discrepancies Caught"   value={fmt(analytics?.totalDiscrepanciesCaught)} sub="Arithmetic & compliance flags"                           iconBg="bg-rose-500"  />
-              <MetricCard icon={Hash}          label="Documents Audited"      value={analytics?.totalDocuments ?? 0}           sub={`${analytics?.highRiskCount ?? 0} high · ${analytics?.lowRiskCount ?? 0} clean`} iconBg="bg-amber-600" />
-              <MetricCard icon={TrendingUp}    label="Audit Health Score"     value={`${healthScore}%`}                        sub="Percentage of clean / low-risk docs"                    iconBg="bg-emerald-700" />
+              <MetricCard icon={DollarSign}    label="Total Spend Audited"   value={fmt(displayAnalytics?.totalSpend)}               sub="Across all your invoices"                                         iconBg="bg-stone-800" demo={!isAuthenticated} />
+              <MetricCard icon={AlertTriangle} label="Discrepancies Caught"  value={fmt(displayAnalytics?.totalDiscrepanciesCaught)}  sub="Arithmetic & compliance flags"                                    iconBg="bg-rose-500"  demo={!isAuthenticated} />
+              <MetricCard icon={Hash}          label="Documents Audited"     value={displayAnalytics?.totalDocuments ?? 0}            sub={`${displayAnalytics?.highRiskCount ?? 0} high · ${displayAnalytics?.lowRiskCount ?? 0} clean`} iconBg="bg-amber-600" demo={!isAuthenticated} />
+              <MetricCard icon={TrendingUp}    label="Audit Health Score"    value={`${healthScore}%`}                               sub="Percentage of clean / low-risk docs"                              iconBg="bg-emerald-700" demo={!isAuthenticated} />
             </div>
           </section>
 
@@ -517,21 +619,24 @@ export default function App() {
                   onDragLeave={() => setDragging(false)}
                   onDrop={onDrop}
                   className={`border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center gap-3 cursor-pointer transition-all duration-300 ${
-                    dragging
-                      ? 'border-amber-400 bg-amber-50/40'
-                      : files.length
-                      ? 'border-emerald-400 bg-emerald-50/20'
-                      : 'border-[#D6CEBE] bg-white/50 hover:border-amber-400 hover:bg-amber-50/20'
+                    dragging ? 'border-amber-400 bg-amber-50/40'
+                    : displayFiles.length ? 'border-emerald-400 bg-emerald-50/20'
+                    : 'border-[#D6CEBE] bg-white/50 hover:border-amber-400 hover:bg-amber-50/20'
                   }`}
                 >
-                  {files.length > 0 ? (
+                  {displayFiles.length > 0 ? (
                     <>
                       <CheckCircle size={32} className="text-emerald-600" />
                       <div className="text-center">
-                        <p className="font-bold text-emerald-700">{files.length === 1 ? files[0].name : `${files.length} files selected`}</p>
-                        <p className="text-xs text-stone-400 mt-1">
-                          {files.length === 1 ? `${(files[0].size / 1024).toFixed(1)} KB — ready for audit` : files.map((f) => f.name).join(', ')}
+                        <p className="font-bold text-emerald-700">
+                          {displayFiles.length === 1 ? displayFiles[0].name : `${displayFiles.length} files selected`}
                         </p>
+                        <p className="text-xs text-stone-400 mt-1">
+                          {displayFiles.length === 1 ? `${(displayFiles[0].size / 1024).toFixed(1)} KB` : displayFiles.map((f) => f.name).join(', ')}
+                        </p>
+                        {!isAuthenticated && (
+                          <p className="text-xs text-amber-600 font-semibold mt-2">Sign in to run the audit →</p>
+                        )}
                       </div>
                     </>
                   ) : (
@@ -539,7 +644,9 @@ export default function App() {
                       <UploadCloud size={32} className="text-stone-300" />
                       <div className="text-center">
                         <p className="text-stone-500 font-semibold">Drag &amp; drop invoices here</p>
-                        <p className="text-xs text-stone-400 mt-1">or click to browse · select multiple for batch audit</p>
+                        <p className="text-xs text-stone-400 mt-1">
+                          {isAuthenticated ? 'or click to browse · select multiple for batch audit' : 'or click to browse — sign in to run live AI audit'}
+                        </p>
                       </div>
                     </>
                   )}
@@ -575,12 +682,14 @@ export default function App() {
                 )}
 
                 <button
-                  onClick={handleAudit}
-                  disabled={!files.length || loading}
+                  onClick={() => requireAuth(handleAudit, 'Please sign in to run live AI-powered invoice audits.')}
+                  disabled={loading || (!isAuthenticated ? !displayFiles.length : !files.length)}
                   className="w-full flex items-center justify-center gap-2 bg-stone-900 hover:bg-stone-800 disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed text-stone-50 font-bold py-3.5 rounded-xl transition-all shadow-md shadow-stone-900/10 disabled:shadow-none"
                 >
                   {loading ? (
                     <><Loader2 size={17} className="animate-spin" /> Auditing…</>
+                  ) : !isAuthenticated ? (
+                    <><ShieldCheck size={17} /> Sign In to Audit Document</>
                   ) : (
                     <><ShieldCheck size={17} /> Audit &amp; Validate {files.length > 1 ? `${files.length} Documents` : 'Document'}</>
                   )}
@@ -590,7 +699,7 @@ export default function App() {
           </section>
 
           {/* ── Active Audit Report ── */}
-          {activeDoc && (
+          {activeDoc && isAuthenticated && (
             <section className="space-y-5">
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div className="flex items-center gap-2">
@@ -610,14 +719,12 @@ export default function App() {
                     <Sparkles size={13} />
                     {showCopilot ? 'Close Copilot' : 'Ask Copilot'}
                   </button>
-                  {history.length > 0 && (
-                    <button
-                      onClick={() => downloadCSV(history)}
-                      className="flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-xl border border-[#E7E1D4] bg-white/70 text-stone-600 hover:bg-[#F5EFE6] hover:border-[#D8CEBC] transition-all shadow-sm"
-                    >
-                      <Download size={13} /> Export CSV
-                    </button>
-                  )}
+                  <button
+                    onClick={() => requireAuth(() => downloadCSV(history), 'Please sign in to export audit data.')}
+                    className="flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-xl border border-[#E7E1D4] bg-white/70 text-stone-600 hover:bg-[#F5EFE6] hover:border-[#D8CEBC] transition-all shadow-sm"
+                  >
+                    <Download size={13} /> Export CSV
+                  </button>
                 </div>
               </div>
 
@@ -625,9 +732,7 @@ export default function App() {
               {activeDoc.audit?.riskLevel === 'LOW' ? (
                 <SpotlightCard className="bg-[#F0FDF4]/80 border-emerald-200" spotlightColor="rgba(16, 185, 129, 0.10)">
                   <div className="flex items-center gap-4 px-5 py-4">
-                    <div className="p-2.5 rounded-xl bg-emerald-100 border border-emerald-200">
-                      <ShieldCheck size={22} className="text-emerald-700" />
-                    </div>
+                    <div className="p-2.5 rounded-xl bg-emerald-100 border border-emerald-200"><ShieldCheck size={22} className="text-emerald-700" /></div>
                     <div>
                       <p className="font-extrabold text-emerald-900 text-lg">Verified — 100% Math &amp; Compliance Check Passed</p>
                       <p className="text-sm text-emerald-700 mt-0.5">No discrepancies detected. This invoice is fully compliant.</p>
@@ -638,14 +743,10 @@ export default function App() {
                 <SpotlightCard className="bg-[#FFF1F2]/80 border-rose-200" spotlightColor="rgba(239, 68, 68, 0.10)">
                   <div className="px-5 py-4 space-y-3">
                     <div className="flex items-center gap-4">
-                      <div className="p-2.5 rounded-xl bg-rose-100 border border-rose-200">
-                        <ShieldAlert size={22} className="text-rose-700" />
-                      </div>
+                      <div className="p-2.5 rounded-xl bg-rose-100 border border-rose-200"><ShieldAlert size={22} className="text-rose-700" /></div>
                       <div>
                         <p className="font-extrabold text-rose-900 text-lg">Discrepancy Detected</p>
-                        <p className="text-sm text-rose-600 mt-0.5">
-                          Discrepancy: <span className="font-bold text-rose-800">{fmt(Math.abs(activeDoc.audit?.discrepancy))}</span>
-                        </p>
+                        <p className="text-sm text-rose-600 mt-0.5">Discrepancy: <span className="font-bold text-rose-800">{fmt(Math.abs(activeDoc.audit?.discrepancy))}</span></p>
                       </div>
                     </div>
                     {activeDoc.audit?.flags?.length > 0 && (
@@ -749,7 +850,7 @@ export default function App() {
                     </div>
                   ) : (
                     <button
-                      onClick={handleSync}
+                      onClick={() => requireAuth(handleSync, 'Please sign in to approve and sync documents to ERP.')}
                       disabled={syncing}
                       className="flex items-center gap-2 bg-stone-900 hover:bg-stone-800 disabled:bg-stone-200 disabled:text-stone-400 text-stone-50 text-sm font-bold px-4 py-2.5 rounded-xl transition-all shadow-md shadow-stone-900/10 disabled:shadow-none"
                     >
@@ -783,11 +884,7 @@ export default function App() {
                         onClick={handleCopy}
                         className="flex items-center gap-2 bg-white hover:bg-[#F5EFE6] border border-[#E7E1D4] text-stone-700 text-sm font-semibold px-4 py-2 rounded-xl transition-all shadow-sm"
                       >
-                        {copied ? (
-                          <><Check size={13} className="text-emerald-600" /><span className="text-emerald-700">Copied!</span></>
-                        ) : (
-                          <><Copy size={13} />Copy Dispute Email</>
-                        )}
+                        {copied ? <><Check size={13} className="text-emerald-600" /><span className="text-emerald-700">Copied!</span></> : <><Copy size={13} />Copy Dispute Email</>}
                       </button>
                     </div>
                   )}
@@ -797,7 +894,7 @@ export default function App() {
           )}
 
           {/* ── Audit History ── */}
-          {history.length > 0 && (
+          {isAuthenticated && history.length > 0 && (
             <section className="bg-white/80 backdrop-blur border border-[#E7E1D4] shadow-sm rounded-2xl overflow-hidden">
               <div className="px-5 py-4 border-b border-[#EFE8DD] flex items-center gap-2 bg-[#F5EFE6]/50">
                 <FileText size={15} className="text-amber-600" />
@@ -845,12 +942,33 @@ export default function App() {
               </div>
             </section>
           )}
+
+          {/* ── Guest CTA Banner ── */}
+          {!isAuthenticated && (
+            <section>
+              <SpotlightCard className="bg-stone-900/95 border-stone-800" spotlightColor="rgba(245, 158, 11, 0.15)">
+                <div className="p-8 flex flex-col sm:flex-row items-center justify-between gap-6">
+                  <div className="text-center sm:text-left">
+                    <h3 className="text-xl font-extrabold text-stone-50">Ready to audit your invoices?</h3>
+                    <p className="text-sm text-stone-400 mt-1">Create a free account to unlock AI-powered audits, fraud detection, and ERP sync.</p>
+                  </div>
+                  <button
+                    onClick={() => { setAuthContext(''); setShowAuthModal(true); }}
+                    className="flex-shrink-0 flex items-center gap-2 bg-amber-400 hover:bg-amber-300 text-stone-900 font-bold px-6 py-3 rounded-xl transition-all shadow-lg shadow-amber-400/20"
+                  >
+                    <ShieldCheck size={17} />
+                    Get Started Free
+                  </button>
+                </div>
+              </SpotlightCard>
+            </section>
+          )}
         </main>
 
         <footer className="border-t border-[#E7E1D4] mt-12 py-6 text-center text-xs text-stone-400">
           DocuAudit AI · Powered by Gemini 2.5 Flash · MongoDB Atlas · All audit results are AI-assisted and should be verified by a qualified accountant.
         </footer>
-      </div>{/* end z-10 */}
+      </div>
     </div>
   );
 }
